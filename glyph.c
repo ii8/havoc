@@ -1309,6 +1309,11 @@ int font_init(float size, int *w, int *h)
 	long file_size;
 	FILE *file = fopen("/usr/share/fonts/TTF/DejaVuSansMono.ttf", "rb");
 
+	if (file == NULL) {
+		perror("could not open font");
+		return -1;
+	}
+
 	fseek(file, 0, SEEK_END);
 	file_size = ftell(file);
 	fseek(file, 0, SEEK_SET);
