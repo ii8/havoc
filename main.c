@@ -9,6 +9,7 @@
 #include <time.h>
 #include <sys/mman.h>
 #include <sys/epoll.h>
+#include <sys/timerfd.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <pty.h>
@@ -71,6 +72,13 @@ static struct {
 	xkb_mod_index_t xkb_shift;
 
 	struct wl_keyboard *kbd;
+
+	struct {
+		int fd;
+		xkb_keysym_t sym;
+		uint32_t unicode;
+		struct itimerspec its;
+	} repeat;
 
 	bool has_argb;
 	bool has_kbd;
@@ -367,9 +375,6 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 	xkb_keysym_t sym;
 	uint32_t unicode;
 
-	if (state == WL_KEYBOARD_KEY_STATE_RELEASED)
-		return;
-
 	sym = xkb_state_key_get_one_sym(term.xkb_state, key + 8);
 
 	switch (sym) {
@@ -388,9 +393,22 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		return;
 	}
 
-	unicode = xkb_keysym_to_utf32(sym);
+	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+		if (sym == term.repeat.sym) {
+			struct itimerspec its = {
+				{ 0, 0 }, { 0, 0 }
+			};
 
-	tsm_vte_handle_keyboard(term.vte, sym, 0, term.mods, unicode);
+			timerfd_settime(term.repeat.fd, 0, &its, NULL);
+		}
+	} else if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+		unicode = xkb_keysym_to_utf32(sym);
+
+		term.repeat.sym = sym;
+		term.repeat.unicode = unicode;
+		timerfd_settime(term.repeat.fd, 0, &term.repeat.its, NULL);
+		tsm_vte_handle_keyboard(term.vte, sym, 0, term.mods, unicode);
+	}
 }
 
 static void kbd_mods(void *data, struct wl_keyboard *k, uint32_t serial,
@@ -419,6 +437,16 @@ static void kbd_mods(void *data, struct wl_keyboard *k, uint32_t serial,
 static void kbd_repeat(void *data, struct wl_keyboard *k,
 		       int32_t rate, int32_t delay)
 {
+	if (rate == 0)
+		return;
+	else if (rate == 1)
+		term.repeat.its.it_interval.tv_sec = 1;
+	else
+		term.repeat.its.it_interval.tv_nsec = 1000000000 / rate;
+
+	term.repeat.its.it_value.tv_sec = delay / 1000;
+	delay -= term.repeat.its.it_value.tv_sec * 1000;
+	term.repeat.its.it_value.tv_nsec = delay * 1000 * 1000;
 }
 
 static struct wl_keyboard_listener kbd_listener = {
@@ -572,9 +600,20 @@ static void handle_tty(int ev)
 	}
 }
 
+static void handle_repeat(int ev)
+{
+	uint64_t exp;
+
+	if (read(term.repeat.fd, &exp, sizeof exp) < 0)
+		return;
+
+	tsm_vte_handle_keyboard(term.vte, term.repeat.sym, 0, term.mods,
+				term.repeat.unicode);
+}
+
 static struct epcb {
 	void (*f)(int);
-} dfp = { handle_display }, tfp = { handle_tty };
+} dfp = { handle_display }, tfp = { handle_tty }, rfp = { handle_repeat };
 
 int main(int argc, char *argv[])
 {
@@ -645,6 +684,12 @@ int main(int argc, char *argv[])
 			goto ekbd;
 
 		wl_keyboard_add_listener(term.kbd, &kbd_listener, NULL);
+		term.repeat.fd = timerfd_create(CLOCK_MONOTONIC,
+						TFD_NONBLOCK | TFD_CLOEXEC);
+		if (term.repeat.fd < 0) {
+			perror("failed to create repeat timer");
+			goto etimer;
+		}
 	}
 
 	pid = forkpty(&term.master_fd, NULL, NULL, NULL);
@@ -667,6 +712,10 @@ int main(int argc, char *argv[])
 	ee[0].events = EPOLLIN | EPOLLHUP | EPOLLERR;
 	ee[0].data.ptr = &tfp;
 	epoll_ctl(fd, EPOLL_CTL_ADD, term.master_fd, &ee[0]);
+
+	ee[0].events = EPOLLIN;
+	ee[0].data.ptr = &rfp;
+	epoll_ctl(fd, EPOLL_CTL_ADD, term.repeat.fd, &ee[0]);
 
 	while (!term.die) {
 		if (term.can_redraw && term.need_redraw && term.configured)
@@ -694,6 +743,8 @@ eflush:
 	if (term.cb)
 		wl_callback_destroy(term.cb);
 etty:
+	close(term.repeat.fd);
+etimer:
 	if (term.kbd)
 		wl_keyboard_release(term.kbd);
 ekbd:
