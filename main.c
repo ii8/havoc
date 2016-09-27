@@ -371,6 +371,23 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		return;
 
 	sym = xkb_state_key_get_one_sym(term.xkb_state, key + 8);
+
+	switch (sym) {
+	case XKB_KEY_Shift_L:
+	case XKB_KEY_Shift_R:
+	case XKB_KEY_Control_L:
+	case XKB_KEY_Control_R:
+	case XKB_KEY_Alt_L:
+	case XKB_KEY_Alt_R:
+	case XKB_KEY_Meta_L:
+	case XKB_KEY_Meta_R:
+	case XKB_KEY_Super_L:
+	case XKB_KEY_Super_R:
+	case XKB_KEY_Hyper_L:
+	case XKB_KEY_Hyper_R:
+		return;
+	}
+
 	unicode = xkb_keysym_to_utf32(sym);
 
 	tsm_vte_handle_keyboard(term.vte, sym, 0, term.mods, unicode);
