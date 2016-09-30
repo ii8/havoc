@@ -10,6 +10,17 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+
+
+struct node {
+	bool red;
+	struct node *link[2];
+	uint32_t ch;
+	unsigned char *bitmap;
+};
+
+static struct node leaf = { false, { NULL, NULL }, 0, NULL };
 
 struct font {
 	unsigned char *data;
@@ -27,6 +38,8 @@ struct font {
 	int width, height;
 	int ascent;
 	float scale;
+
+	struct node *cache;
 };
 
 enum {
@@ -1266,7 +1279,120 @@ static short get_bearing(struct font *f, int glyph)
 				  + 2 * (glyph - f->num_metrics));
 }
 
-void get_glyph(unsigned char *buf, int c, unsigned cwidth)
+static void flip(struct node *node)
+{
+	node->red = true;
+	node->link[0]->red = false;
+	node->link[1]->red = false;
+}
+
+static struct node *rotate(struct node *node, int dir)
+{
+	struct node *tmp = node->link[!dir];
+
+	node->link[!dir] = tmp->link[dir];
+	tmp->link[dir] = node;
+
+	tmp->red = false;
+	node->red = true;;
+
+	return tmp;
+}
+
+static struct node *rotate2(struct node *node, int dir)
+{
+	node->link[!dir] = rotate(node->link[!dir], !dir);
+
+	return rotate(node, dir);
+}
+
+static struct node *new_entry(uint32_t ch, bool red, unsigned char *bitmap)
+{
+	struct node *n;
+
+	n = malloc(sizeof *n);
+	n->link[0] = n->link[1] = &leaf;
+	n->red = red;
+	n->ch = ch;
+	n->bitmap = bitmap;
+	return n;
+}
+
+static void cache(struct node **root, uint32_t ch, unsigned char *bitmap)
+{
+	struct node fake = { false, { NULL, *root }, 0, NULL };
+	struct node *i = *root;
+	struct node *p, *g, *gg;
+	int dir = 0, last;
+
+	/* Initializing `last` is not actually necessary, but it stops the
+	 * compiler crying */
+	last = 0;
+
+	if (*root == &leaf) {
+		*root = new_entry(ch, false, bitmap);
+		return;
+	}
+
+	gg = &fake;
+	p = g = &leaf;
+
+	for (; ; ) {
+		if (i == &leaf)
+			p->link[dir] = i = new_entry(ch, true, bitmap);
+		else if (i->link[0]->red && i->link[1]->red)
+			flip(i);
+
+		if (i->red && p->red) {
+			int d = gg->link[1] == g;
+
+			if (i == p->link[last])
+				gg->link[d] = rotate(g, !last);
+			else
+				gg->link[d] = rotate2(g, !last);
+		}
+
+		if (ch == i->ch)
+			break;
+
+		last = dir;
+		dir = i->ch < ch;
+
+		if (g != &leaf)
+			gg = g;
+		g = p;
+		p = i;
+		i = i->link[dir];
+	}
+	*root = fake.link[1];
+	(*root)->red = false;
+}
+
+static void delete_cache(struct node *n)
+{
+	if (n == &leaf)
+		return;
+
+	delete_cache(n->link[0]);
+	delete_cache(n->link[1]);
+
+	free(n->bitmap);
+	free(n);
+}
+
+static unsigned char *lookup(struct node *n, uint32_t ch)
+{
+	while (n) {
+		if (n->ch == ch) {
+			return n->bitmap;
+		}
+		n = n->link[n->ch < ch];
+	}
+
+	return NULL;
+}
+
+unsigned char *new_glyph(uint32_t id, uint32_t c, unsigned cwidth)
 {
 	struct vertex *vertices;
 	int xmin, ymin;
@@ -1277,14 +1403,29 @@ void get_glyph(unsigned char *buf, int c, unsigned cwidth)
 		font.width * cwidth,
 		font.height,
 		font.width * cwidth,
-		buf
+		NULL
 	};
+
+	bm.pixels = malloc(bm.w * bm.h);
 
 	get_glyph_origin(&font, glyph, &xmin, &ymin);
 	render(&bm, 0.35f, vertices, vcount, font.scale, font.scale,
 	       leftb, font.ascent + ymin, xmin, ymin, 1);
 
 	free(vertices);
+
+	cache(&font.cache, id, bm.pixels);
+	return bm.pixels;
+}
+
+unsigned char *get_glyph(uint32_t id, uint32_t c, unsigned cwidth)
+{
+	unsigned char *buf = lookup(font.cache, id);
+
+	if (buf)
+		return buf;
+	else
+		return new_glyph(id, c, cwidth);
 }
 
 static int get_width(struct font *f)
@@ -1330,6 +1471,7 @@ int font_init(float size, int *w, int *h)
 		return free(buf), -1;
 
 	font.num_metrics = read_ushort(font.data + font.hhea + 34);
+	font.cache = &leaf;
 
 	font.ascent = get_ascent(&font);
 	descent = get_descent(&font);
@@ -1351,5 +1493,6 @@ int font_init(float size, int *w, int *h)
 
 void font_deinit(void)
 {
+	delete_cache(font.cache);
 	free(font.data);
 }

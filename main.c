@@ -24,7 +24,7 @@
 typedef unsigned int uint;
 typedef unsigned char uchr;
 
-void get_glyph(unsigned char *buf, int c, uint);
+unsigned char *get_glyph(uint32_t id, uint32_t, uint);
 int font_init(float, int *, int *);
 void font_deinit(void);
 
@@ -33,7 +33,8 @@ static struct {
 	bool configured;
 	bool need_redraw;
 	bool can_redraw;
-	bool resize;
+	bool draw_everything;
+	int resize;
 
 	int master_fd;
 
@@ -63,6 +64,7 @@ static struct {
 	struct tsm_screen *screen;
 	struct tsm_vte *vte;
 	enum tsm_vte_modifier mods;
+	tsm_age_t age;
 
 	struct xkb_context *xkb_ctx;
 	struct xkb_state *xkb_state;
@@ -162,7 +164,10 @@ static int new_buffer(struct buffer *buf)
 		return -1;
 	}
 
-	ftruncate(fd, size);
+	if (ftruncate(fd, size) < 0) {
+		fprintf(stderr, "ftruncate failed: %s\n", strerror(errno));
+		return -1;
+	}
 
 	buf->data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED,
 			 fd, 0);
@@ -200,9 +205,11 @@ static struct buffer *swap_buffers(void)
 	else
 		abort();
 
-	if (term.resize)
+	if (term.resize) {
+		--term.resize;
 		if (new_buffer(buf) < 0)
 			exit(1);
+	}
 
 	return buf;
 }
@@ -260,7 +267,12 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 	uint32_t *dst, bg, fg;
 	uint32_t *buffer = data;
 
+	if (age <= term.age && !term.draw_everything)
+		return 0;
+
 	dst = &buffer[y * term.cheight * term.width + x * term.cwidth];
+	wl_surface_damage(term.surf, x * term.cwidth, y * term.cheight,
+			  term.cwidth, term.cheight);
 
 	if (a->inverse) {
 		bg = term.opacity << 24 | a->fr << 16 | a->fg << 8 | a->fb;
@@ -274,9 +286,8 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 		blank(dst, char_width, bg);
 	} else {
 		assert(len == 1);
-		uchr g[30 * 30];
+		uchr *g = get_glyph(id, ch[0], char_width);
 
-		get_glyph(g, ch[0], char_width);
 		print(dst, char_width, bg, fg, g);
 	}
 
@@ -299,10 +310,8 @@ static void redraw()
 {
 	struct buffer *buffer = swap_buffers();
 
-	tsm_screen_draw(term.screen, draw_cell, buffer->data);
-
 	wl_surface_attach(term.surf, buffer->b, 0, 0);
-	wl_surface_damage(term.surf, 0, 0, term.width, term.height);
+	term.age = tsm_screen_draw(term.screen, draw_cell, buffer->data);
 
 	term.cb = wl_surface_frame(term.surf);
 	wl_callback_add_listener(term.cb, &frame_listener, NULL);
@@ -311,6 +320,16 @@ static void redraw()
 	buffer->busy = true;
 	term.can_redraw = false;
 	term.need_redraw = false;
+	term.draw_everything = false;
+}
+
+static void reset_repeat(void)
+{
+	struct itimerspec its = {
+		{ 0, 0 }, { 0, 0 }
+	};
+
+	timerfd_settime(term.repeat.fd, 0, &its, NULL);
 }
 
 static void kbd_keymap(void *data, struct wl_keyboard *k, uint32_t fmt,
@@ -367,6 +386,7 @@ static void kbd_enter(void *data, struct wl_keyboard *k, uint32_t serial,
 static void kbd_leave(void *data, struct wl_keyboard *k, uint32_t serial,
 		      struct wl_surface *surf)
 {
+	reset_repeat();
 }
 
 static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
@@ -394,13 +414,8 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 	}
 
 	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
-		if (sym == term.repeat.sym) {
-			struct itimerspec its = {
-				{ 0, 0 }, { 0, 0 }
-			};
-
-			timerfd_settime(term.repeat.fd, 0, &its, NULL);
-		}
+		if (sym == term.repeat.sym)
+			reset_repeat();
 	} else if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		unicode = xkb_keysym_to_utf32(sym);
 
@@ -432,6 +447,8 @@ static void kbd_mods(void *data, struct wl_keyboard *k, uint32_t serial,
 		term.mods |= TSM_CONTROL_MASK;
 	if (m & 1 << term.xkb_shift)
 		term.mods |= TSM_SHIFT_MASK;
+
+	reset_repeat();
 }
 
 static void kbd_repeat(void *data, struct wl_keyboard *k,
@@ -474,13 +491,12 @@ static struct wl_seat_listener seat_listener = {
 };
 
 static void toplvl_configure(void *data, struct zxdg_toplevel_v6 *xdg_toplevel,
-			      int32_t width, int32_t height,
-			      struct wl_array *state)
+			     int32_t width, int32_t height,
+			     struct wl_array *state)
 {
 	term.configured = false;
-	term.need_redraw = true;
-	term.width = width ? width : term.col * term.cwidth;
-	term.height = height ? height : term.row * term.cheight;
+	term.width = width ? width : 180 * term.cwidth;
+	term.height = height ? height : 24 * term.cheight;
 }
 
 static void toplvl_close(void *data, struct zxdg_toplevel_v6 *t)
@@ -501,7 +517,7 @@ static void configure(void *d, struct zxdg_surface_v6 *surf, uint32_t serial)
 
 	assert(!term.configured);
 
-	if (col && row) {
+	if (col && row && (term.col != col || term.row != row)) {
 		struct winsize ws = {
 			row, col, 0, 0
 		};
@@ -510,9 +526,11 @@ static void configure(void *d, struct zxdg_surface_v6 *surf, uint32_t serial)
 		tsm_screen_resize(term.screen, col, row);
 		term.col = col;
 		term.row = row;
-		term.resize = true;
-		term.configured = true;
+		term.need_redraw = true;
+		term.draw_everything = true;
+		term.resize = 2;
 	}
+	term.configured = true;
 }
 
 static const struct zxdg_surface_v6_listener surf_listener = {
@@ -623,8 +641,6 @@ int main(int argc, char *argv[])
 	int n, i, ret = 1;
 
 	term.opacity = 0xe0;
-	term.col = 180;
-	term.row = 24;
 
 	if (font_init(22.0f, &term.cwidth, &term.cheight) < 0)
 		goto efont;
