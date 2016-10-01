@@ -59,6 +59,7 @@ static struct {
 	int col, row;
 	int cwidth, cheight;
 	int width, height;
+	int confheight, confwidth;
 	uchr opacity;
 
 	struct tsm_screen *screen;
@@ -142,15 +143,13 @@ static int new_buffer(struct buffer *buf)
 	char shm_name[14];
 	int fd, size, stride;
 	int max = 100;
-	int w = term.cwidth * term.col;
-	int h = term.cheight * term.row;
 
 	assert(!buf->busy);
 	if (buf->b)
 		wl_buffer_destroy(buf->b);
 
-	stride = w * 4;
-	size = stride * h;
+	stride = term.width * 4;
+	size = stride * term.height;
 
 	srand(time(NULL));
 	do {
@@ -180,14 +179,11 @@ static int new_buffer(struct buffer *buf)
 	}
 
 	pool = wl_shm_create_pool(term.shm, fd, size);
-	buf->b = wl_shm_pool_create_buffer(pool, 0, w, h, stride,
-					   WL_SHM_FORMAT_ARGB8888);
+	buf->b = wl_shm_pool_create_buffer(pool, 0, term.width, term.height,
+					   stride, WL_SHM_FORMAT_ARGB8888);
 	wl_buffer_add_listener(buf->b, &buf_listener, buf);
 	wl_shm_pool_destroy(pool);
 	close(fd);
-
-	term.width = w;
-	term.height = h;
 
 	return 0;
 }
@@ -495,8 +491,8 @@ static void toplvl_configure(void *data, struct zxdg_toplevel_v6 *xdg_toplevel,
 			     struct wl_array *state)
 {
 	term.configured = false;
-	term.width = width ? width : 180 * term.cwidth;
-	term.height = height ? height : 24 * term.cheight;
+	term.confwidth = width ? width : 180 * term.cwidth;
+	term.confheight = height ? height : 24 * term.cheight;
 }
 
 static void toplvl_close(void *data, struct zxdg_toplevel_v6 *t)
@@ -512,8 +508,8 @@ static const struct zxdg_toplevel_v6_listener toplvl_listener = {
 static void configure(void *d, struct zxdg_surface_v6 *surf, uint32_t serial)
 {
 	zxdg_surface_v6_ack_configure(surf, serial);
-	int col = term.width / term.cwidth;
-	int row = term.height / term.cheight;
+	int col = term.confwidth / term.cwidth;
+	int row = term.confheight / term.cheight;
 
 	assert(!term.configured);
 
@@ -522,10 +518,14 @@ static void configure(void *d, struct zxdg_surface_v6 *surf, uint32_t serial)
 			row, col, 0, 0
 		};
 
-		ioctl(term.master_fd, TIOCSWINSZ, &ws);
 		tsm_screen_resize(term.screen, col, row);
+		if (ioctl(term.master_fd, TIOCSWINSZ, &ws) < 0)
+			fprintf(stderr, "failed to resize pty %s",
+				strerror(errno));
 		term.col = col;
 		term.row = row;
+		term.width = col * term.cwidth;
+		term.height = row * term.cheight;
 		term.need_redraw = true;
 		term.draw_everything = true;
 		term.resize = 2;
