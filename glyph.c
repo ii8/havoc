@@ -1442,13 +1442,13 @@ static int get_width(struct font *f)
 	return advance;
 }
 
-int font_init(float size, int *w, int *h)
+int font_init(int size, char *path, int *w, int *h)
 {
 	int descent, linegap;
 	uint8_t *buf;
 	size_t read;
 	long file_size;
-	FILE *file = fopen("/usr/share/fonts/TTF/DejaVuSansMono.ttf", "rb");
+	FILE *file = fopen(path, "rb");
 
 	if (file == NULL) {
 		perror("could not open font");
@@ -1476,7 +1476,7 @@ int font_init(float size, int *w, int *h)
 	font.ascent = get_ascent(&font);
 	descent = get_descent(&font);
 	linegap = get_linegap(&font);
-	font.scale = size / (font.ascent - descent);
+	font.scale = (float)size / (font.ascent - descent);
 
 	font.height = font.ascent - descent + linegap;
 	font.width = get_width(&font);

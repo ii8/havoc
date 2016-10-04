@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <ctype.h>
 
 #include <errno.h>
 #include <time.h>
@@ -24,8 +25,8 @@
 typedef unsigned int uint;
 typedef unsigned char uchr;
 
-unsigned char *get_glyph(uint32_t id, uint32_t, uint);
-int font_init(float, int *, int *);
+unsigned char *get_glyph(uint32_t, uint32_t, uint);
+int font_init(int, char *, int *, int *);
 void font_deinit(void);
 
 static struct {
@@ -33,7 +34,6 @@ static struct {
 	bool configured;
 	bool need_redraw;
 	bool can_redraw;
-	bool draw_everything;
 	int resize;
 
 	int master_fd;
@@ -52,7 +52,9 @@ static struct {
 	struct buffer {
 		struct wl_buffer *b;
 		void *data;
+		int size;
 		bool busy;
+		tsm_age_t age;
 	} buf[2];
 	struct wl_callback *cb;
 
@@ -60,12 +62,10 @@ static struct {
 	int cwidth, cheight;
 	int width, height;
 	int confheight, confwidth;
-	uchr opacity;
 
 	struct tsm_screen *screen;
 	struct tsm_vte *vte;
 	enum tsm_vte_modifier mods;
-	tsm_age_t age;
 
 	struct xkb_context *xkb_ctx;
 	struct xkb_state *xkb_state;
@@ -85,7 +85,22 @@ static struct {
 
 	bool has_argb;
 	bool has_kbd;
-} term;
+
+	struct {
+		char shell[32];
+		int col, row;
+		uchr opacity;
+		int font_size;
+		char font_path[512];
+	} cfg;
+} term = {
+	.cfg.shell = "/bin/sh",
+	.cfg.col = 80,
+	.cfg.row = 24,
+	.cfg.opacity = 0xff,
+	.cfg.font_size = 18,
+	.cfg.font_path = ""
+};
 
 static const char *sev2str_table[] = {
 	"FATAL",
@@ -141,15 +156,17 @@ static int new_buffer(struct buffer *buf)
 {
 	struct wl_shm_pool *pool;
 	char shm_name[14];
-	int fd, size, stride;
+	int fd, stride;
 	int max = 100;
 
 	assert(!buf->busy);
-	if (buf->b)
+	if (buf->b) {
 		wl_buffer_destroy(buf->b);
+		munmap(buf->data, buf->size);
+	}
 
 	stride = term.width * 4;
-	size = stride * term.height;
+	buf->size = stride * term.height;
 
 	srand(time(NULL));
 	do {
@@ -163,12 +180,12 @@ static int new_buffer(struct buffer *buf)
 		return -1;
 	}
 
-	if (ftruncate(fd, size) < 0) {
+	if (ftruncate(fd, buf->size) < 0) {
 		fprintf(stderr, "ftruncate failed: %s\n", strerror(errno));
 		return -1;
 	}
 
-	buf->data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED,
+	buf->data = mmap(NULL, buf->size, PROT_READ | PROT_WRITE, MAP_SHARED,
 			 fd, 0);
 	shm_unlink(shm_name);
 
@@ -178,7 +195,7 @@ static int new_buffer(struct buffer *buf)
 		return -1;
 	}
 
-	pool = wl_shm_create_pool(term.shm, fd, size);
+	pool = wl_shm_create_pool(term.shm, fd, buf->size);
 	buf->b = wl_shm_pool_create_buffer(pool, 0, term.width, term.height,
 					   stride, WL_SHM_FORMAT_ARGB8888);
 	wl_buffer_add_listener(buf->b, &buf_listener, buf);
@@ -201,11 +218,9 @@ static struct buffer *swap_buffers(void)
 	else
 		abort();
 
-	if (term.resize) {
-		--term.resize;
+	if (term.resize)
 		if (new_buffer(buf) < 0)
 			exit(1);
-	}
 
 	return buf;
 }
@@ -260,21 +275,19 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 		     const struct tsm_screen_attr *a, tsm_age_t age,
 		     void *data)
 {
-	uint32_t *dst, bg, fg;
-	uint32_t *buffer = data;
+	struct buffer *buffer = data;
+	uint32_t bg, fg, *dst = buffer->data;
 
-	if (age <= term.age && !term.draw_everything)
+	if (age <= buffer->age && !term.resize)
 		return 0;
 
-	dst = &buffer[y * term.cheight * term.width + x * term.cwidth];
-	wl_surface_damage(term.surf, x * term.cwidth, y * term.cheight,
-			  term.cwidth, term.cheight);
+	dst = &dst[y * term.cheight * term.width + x * term.cwidth];
 
 	if (a->inverse) {
-		bg = term.opacity << 24 | a->fr << 16 | a->fg << 8 | a->fb;
+		bg = term.cfg.opacity << 24 | a->fr << 16 | a->fg << 8 | a->fb;
 		fg = 0xff000000 | a->br << 16 | a->bg << 8 | a->bb;
 	} else {
-		bg = term.opacity << 24 | a->br << 16 | a->bg << 8 | a->bb;
+		bg = term.cfg.opacity << 24 | a->br << 16 | a->bg << 8 | a->bb;
 		fg = 0xff000000 | a->fr << 16 | a->fg << 8 | a->fb;
 	}
 
@@ -307,7 +320,8 @@ static void redraw()
 	struct buffer *buffer = swap_buffers();
 
 	wl_surface_attach(term.surf, buffer->b, 0, 0);
-	term.age = tsm_screen_draw(term.screen, draw_cell, buffer->data);
+	buffer->age = tsm_screen_draw(term.screen, draw_cell, buffer);
+	wl_surface_damage(term.surf, 0, 0, term.width, term.height);
 
 	term.cb = wl_surface_frame(term.surf);
 	wl_callback_add_listener(term.cb, &frame_listener, NULL);
@@ -316,7 +330,8 @@ static void redraw()
 	buffer->busy = true;
 	term.can_redraw = false;
 	term.need_redraw = false;
-	term.draw_everything = false;
+	if (term.resize)
+		--term.resize;
 }
 
 static void reset_repeat(void)
@@ -491,8 +506,8 @@ static void toplvl_configure(void *data, struct zxdg_toplevel_v6 *xdg_toplevel,
 			     struct wl_array *state)
 {
 	term.configured = false;
-	term.confwidth = width ? width : 180 * term.cwidth;
-	term.confheight = height ? height : 24 * term.cheight;
+	term.confwidth = width ? width : term.cfg.col * term.cwidth;
+	term.confheight = height ? height : term.cfg.row * term.cheight;
 }
 
 static void toplvl_close(void *data, struct zxdg_toplevel_v6 *t)
@@ -527,7 +542,6 @@ static void configure(void *d, struct zxdg_surface_v6 *surf, uint32_t serial)
 		term.width = col * term.cwidth;
 		term.height = row * term.cheight;
 		term.need_redraw = true;
-		term.draw_everything = true;
 		term.resize = 2;
 	}
 	term.configured = true;
@@ -633,6 +647,138 @@ static struct epcb {
 	void (*f)(int);
 } dfp = { handle_display }, tfp = { handle_tty }, rfp = { handle_repeat };
 
+#define CONF_FILE "havoc.cfg"
+
+enum section {
+	SECTION_GENERAL = 1,
+	SECTION_FONT
+};
+
+static int clip(int a, int b, int c)
+{
+	return a < b ? b : a > c ? c : a;
+}
+
+static void general_config(char *key, char *val)
+{
+	if (strcmp(key, "shell") == 0)
+		strncpy(term.cfg.shell, val, sizeof(term.cfg.shell));
+	else if (strcmp(key, "opacity") == 0)
+		term.cfg.opacity = clip(atoi(val), 0, 255);
+	else if (strcmp(key, "rows") == 0)
+		term.cfg.row = clip(atoi(val), 1, 300);
+	else if (strcmp(key, "columns") == 0)
+		term.cfg.col = clip(atoi(val), 1, 600);
+}
+
+static void font_config(char *key, char *val)
+{
+	if (strcmp(key, "size") == 0) {
+		term.cfg.font_size = clip(atoi(val), 6, 200);
+	} else if (strcmp(key, "path") == 0) {
+		strncpy(term.cfg.font_path, val, sizeof(term.cfg.font_path));
+	}
+}
+
+static FILE *open_config(void)
+{
+	char *dir;
+	char path[512];
+	FILE *f;
+
+	dir = getenv("XDG_CONFIG_HOME");
+	if (dir) {
+		snprintf(path, sizeof(path), "%s/%s", dir, CONF_FILE);
+		f = fopen(path, "r");
+		if (f)
+			return f;
+	}
+
+	dir = getenv("HOME");
+	if (dir) {
+		snprintf(path, sizeof(path), "%s/.config/%s", dir, CONF_FILE);
+		f = fopen(path, "r");
+		if (f)
+			return f;
+	}
+
+	f = fopen(CONF_FILE, "r");
+	return f;
+}
+
+static void read_config(void)
+{
+	FILE *f = open_config();
+	char *key, *val, *p, line[512];
+	enum section section = 0;
+	int i;
+
+	if (f == NULL)
+		return;
+
+	while (fgets(line, sizeof(line), f)) {
+		++i;
+		key = line;
+		while (isblank(*key))
+			++key;
+
+		switch (*key) {
+		case '\n':
+		case '#':
+			continue;
+		case '[':
+			p = strchr(key, ']');
+			if (p == NULL) {
+				fprintf(stderr, "bad line in config at %d", i);
+				continue;
+			}
+			*p = '\0';
+			++key;
+
+			if (strcmp(key, "general") == 0)
+				section = SECTION_GENERAL;
+			else if (strcmp(key, "font") == 0)
+				section = SECTION_FONT;
+
+			continue;
+		default:
+			val = strchr(key, '=');
+			if (val == NULL) {
+				fprintf(stderr, "bad line in config at %d", i);
+				continue;
+			}
+
+			p = val - 1;
+			while (isblank(*p) && p > key) {
+				*p = '\0';
+				--p;
+			}
+
+			val[0] = '\0';
+			++val;
+			while (isblank(*val))
+				++val;
+
+			p = val + strlen(val) - 1;
+			while (isspace(*p) && p > val) {
+				*p = '\0';
+				--p;
+			}
+
+			switch (section) {
+			case SECTION_GENERAL:
+				general_config(key, val);
+				break;
+			case SECTION_FONT:
+				font_config(key, val);
+				break;
+			}
+		}
+	}
+
+	fclose(f);
+}
+
 int main(int argc, char *argv[])
 {
 	int fd, display_fd;
@@ -640,9 +786,10 @@ int main(int argc, char *argv[])
 	struct epoll_event ee[16];
 	int n, i, ret = 1;
 
-	term.opacity = 0xe0;
+	read_config();
 
-	if (font_init(22.0f, &term.cwidth, &term.cheight) < 0)
+	if (font_init(term.cfg.font_size, term.cfg.font_path,
+		      &term.cwidth, &term.cheight) < 0)
 		goto efont;
 
 	term.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
@@ -713,7 +860,7 @@ int main(int argc, char *argv[])
 		goto etty;
 	} else if (pid == 0) {
 		setenv("TERM", "xterm-256color", 1);
-		if (execl("/bin/sh", "/bin/sh", NULL)) {
+		if (execl(term.cfg.shell, term.cfg.shell, NULL)) {
 			exit(EXIT_FAILURE);
 		}
 	}
