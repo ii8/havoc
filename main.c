@@ -662,7 +662,7 @@ static int clip(int a, int b, int c)
 static void general_config(char *key, char *val)
 {
 	if (strcmp(key, "shell") == 0)
-		strncpy(term.cfg.shell, val, sizeof(term.cfg.shell));
+		strncpy(term.cfg.shell, val, sizeof(term.cfg.shell) - 1);
 	else if (strcmp(key, "opacity") == 0)
 		term.cfg.opacity = clip(atoi(val), 0, 255);
 	else if (strcmp(key, "rows") == 0)
@@ -673,11 +673,11 @@ static void general_config(char *key, char *val)
 
 static void font_config(char *key, char *val)
 {
-	if (strcmp(key, "size") == 0) {
+	if (strcmp(key, "size") == 0)
 		term.cfg.font_size = clip(atoi(val), 6, 200);
-	} else if (strcmp(key, "path") == 0) {
-		strncpy(term.cfg.font_path, val, sizeof(term.cfg.font_path));
-	}
+	else if (strcmp(key, "path") == 0)
+		strncpy(term.cfg.font_path, val,
+			sizeof(term.cfg.font_path) - 1);
 }
 
 static FILE *open_config(void)

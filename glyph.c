@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdbool.h>
 
+#include "fallback.h"
 
 struct node {
 	bool red;
@@ -40,6 +41,8 @@ struct font {
 	float scale;
 
 	struct node *cache;
+
+	bool is_file;
 };
 
 enum {
@@ -1442,33 +1445,57 @@ static int get_width(struct font *f)
 	return advance;
 }
 
-int font_init(int size, char *path, int *w, int *h)
+static uint8_t *open_font(char *path)
 {
-	int descent, linegap;
-	uint8_t *buf;
 	size_t read;
 	long file_size;
-	FILE *file = fopen(path, "rb");
+	FILE *file;
+	uint8_t *buf;
+
+	if (path == NULL || *path == '\0')
+		return NULL;
+
+	file = fopen(path, "r");
 
 	if (file == NULL) {
 		perror("could not open font");
-		return -1;
+		return NULL;
 	}
 
 	fseek(file, 0, SEEK_END);
 	file_size = ftell(file);
 	fseek(file, 0, SEEK_SET);
+
 	buf = malloc(file_size);
 	if (buf == NULL)
-		return -1;
+		return NULL;
+
 	read = fread(buf, 1, file_size, file);
 	fclose(file);
 
 	if (read != (unsigned long)file_size)
-		return free(buf), -1;
+		return free(buf), NULL;
 
-	if (setup(&font, buf, 0) < 0)
-		return free(buf), -1;
+	font.is_file = true;
+	return buf;
+}
+
+int font_init(int size, char *path, int *w, int *h)
+{
+	int descent, linegap;
+	uint8_t *buf;
+
+	buf = open_font(path);
+	if (buf == NULL) {
+		fputs("using fallback font\n", stderr);
+		buf = &fallback[0];
+	}
+
+	if (setup(&font, buf, 0) < 0) {
+		if (font.is_file)
+			free(buf);
+		return -1;
+	}
 
 	font.num_metrics = read_ushort(font.data + font.hhea + 34);
 	font.cache = &leaf;
@@ -1494,5 +1521,6 @@ int font_init(int size, char *path, int *w, int *h)
 void font_deinit(void)
 {
 	delete_cache(font.cache);
-	free(font.data);
+	if (font.is_file)
+		free(font.data);
 }
