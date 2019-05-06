@@ -1,6 +1,8 @@
 
 CC=cc
 SCANNER=wayland-scanner
+PROTDIR=$(shell pkg-config --variable=datarootdir wayland-protocols)/wayland-protocols
+
 PREFIX=/usr/local
 BINDIR=$(PREFIX)/bin
 
@@ -20,10 +22,10 @@ havoc: $(OBJ)
 install: havoc
 	install havoc $(BINDIR)
 
-xdg-shell.c: xdg-shell-unstable-v6.xml
+xdg-shell.c: $(PROTDIR)/stable/xdg-shell/xdg-shell.xml
 	$(SCANNER) code < $< > $@
 
-xdg-shell.h: xdg-shell-unstable-v6.xml
+xdg-shell.h: $(PROTDIR)/stable/xdg-shell/xdg-shell.xml
 	$(SCANNER) client-header < $< > $@
 
 .PHONY: all clean

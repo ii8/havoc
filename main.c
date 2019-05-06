@@ -42,12 +42,12 @@ static struct {
 	struct wl_registry *registry;
 	struct wl_compositor *cp;
 	struct wl_shm *shm;
-	struct zxdg_shell_v6 *shell;
+	struct xdg_wm_base *wm_base;
 	struct wl_seat *seat;
 
 	struct wl_surface *surf;
-	struct zxdg_surface_v6 *xdgsurf;
-	struct zxdg_toplevel_v6 *toplvl;
+	struct xdg_surface *xdgsurf;
+	struct xdg_toplevel *toplvl;
 
 	struct buffer {
 		struct wl_buffer *b;
@@ -501,7 +501,7 @@ static struct wl_seat_listener seat_listener = {
 	seat_name
 };
 
-static void toplvl_configure(void *data, struct zxdg_toplevel_v6 *xdg_toplevel,
+static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
 			     int32_t width, int32_t height,
 			     struct wl_array *state)
 {
@@ -510,19 +510,19 @@ static void toplvl_configure(void *data, struct zxdg_toplevel_v6 *xdg_toplevel,
 	term.confheight = height ? height : term.cfg.row * term.cheight;
 }
 
-static void toplvl_close(void *data, struct zxdg_toplevel_v6 *t)
+static void toplvl_close(void *data, struct xdg_toplevel *t)
 {
 	term.die = true;
 }
 
-static const struct zxdg_toplevel_v6_listener toplvl_listener = {
+static const struct xdg_toplevel_listener toplvl_listener = {
 	toplvl_configure,
 	toplvl_close
 };
 
-static void configure(void *d, struct zxdg_surface_v6 *surf, uint32_t serial)
+static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
 {
-	zxdg_surface_v6_ack_configure(surf, serial);
+	xdg_surface_ack_configure(surf, serial);
 	int col = term.confwidth / term.cwidth;
 	int row = term.confheight / term.cheight;
 
@@ -547,16 +547,16 @@ static void configure(void *d, struct zxdg_surface_v6 *surf, uint32_t serial)
 	term.configured = true;
 }
 
-static const struct zxdg_surface_v6_listener surf_listener = {
+static const struct xdg_surface_listener surf_listener = {
 	configure
 };
 
-static void ping(void *data, struct zxdg_shell_v6 *shell, uint32_t serial)
+static void ping(void *data, struct xdg_wm_base *wm_base, uint32_t serial)
 {
-	zxdg_shell_v6_pong(shell, serial);
+	xdg_wm_base_pong(wm_base, serial);
 }
 
-static const struct zxdg_shell_v6_listener shell_listener = {
+static const struct xdg_wm_base_listener wm_base_listener = {
 	ping
 };
 
@@ -578,10 +578,10 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "wl_shm") == 0) {
 		term.shm = wl_registry_bind(r, id, &wl_shm_interface, 1);
 		wl_shm_add_listener(term.shm, &shm_listener, NULL);
-	} else if (strcmp(i, "zxdg_shell_v6") == 0) {
-		term.shell = wl_registry_bind(r, id, &zxdg_shell_v6_interface,
+	} else if (strcmp(i, "xdg_wm_base") == 0) {
+		term.wm_base = wl_registry_bind(r, id, &xdg_wm_base_interface,
 					      1);
-		zxdg_shell_v6_add_listener(term.shell, &shell_listener, NULL);
+		xdg_wm_base_add_listener(term.wm_base, &wm_base_listener, NULL);
 	} else if (strcmp(i, "wl_seat") == 0) {
 		term.seat = wl_registry_bind(r, id, &wl_seat_interface, 5);
 		wl_seat_add_listener(term.seat, &seat_listener, NULL);
@@ -806,7 +806,7 @@ int main(int argc, char *argv[])
 	wl_registry_add_listener(term.registry, &reg_listener, NULL);
 
 	wl_display_roundtrip(term.display);
-	if (!term.cp || !term.shm || !term.shell) {
+	if (!term.cp || !term.shm || !term.wm_base) {
 		fprintf(stderr, "missing required globals\n");
 		goto eglobals;
 	}
@@ -829,15 +829,15 @@ int main(int argc, char *argv[])
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)
 		goto esurf;
-	term.xdgsurf = zxdg_shell_v6_get_xdg_surface(term.shell, term.surf);
+	term.xdgsurf = xdg_wm_base_get_xdg_surface(term.wm_base, term.surf);
 	if (term.xdgsurf == NULL)
 		goto exdgsurf;
-	zxdg_surface_v6_add_listener(term.xdgsurf, &surf_listener, NULL);
-	term.toplvl = zxdg_surface_v6_get_toplevel(term.xdgsurf);
+	xdg_surface_add_listener(term.xdgsurf, &surf_listener, NULL);
+	term.toplvl = xdg_surface_get_toplevel(term.xdgsurf);
 	if (term.toplvl == NULL)
 		goto etoplvl;
-	zxdg_toplevel_v6_add_listener(term.toplvl, &toplvl_listener, NULL);
-	zxdg_toplevel_v6_set_title(term.toplvl, "havoc");
+	xdg_toplevel_add_listener(term.toplvl, &toplvl_listener, NULL);
+	xdg_toplevel_set_title(term.toplvl, "havoc");
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
 
@@ -911,9 +911,9 @@ etimer:
 	if (term.kbd)
 		wl_keyboard_release(term.kbd);
 ekbd:
-	zxdg_toplevel_v6_destroy(term.toplvl);
+	xdg_toplevel_destroy(term.toplvl);
 etoplvl:
-	zxdg_surface_v6_destroy(term.xdgsurf);
+	xdg_surface_destroy(term.xdgsurf);
 exdgsurf:
 	wl_surface_destroy(term.surf);
 esurf:
@@ -924,8 +924,8 @@ etsm:
 eglobals:
 	if (term.seat)
 		wl_seat_destroy(term.seat);
-	if (term.shell)
-		zxdg_shell_v6_destroy(term.shell);
+	if (term.wm_base)
+		xdg_wm_base_destroy(term.wm_base);
 	if (term.shm)
 		wl_shm_destroy(term.shm);
 	if (term.cp)
