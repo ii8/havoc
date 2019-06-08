@@ -1,20 +1,17 @@
 
-CC=cc
-SCANNER=wayland-scanner
-PROTDIR=$(shell pkg-config --variable=datarootdir wayland-protocols)/wayland-protocols
+SCANNER     := wayland-scanner
+PROTDATADIR != pkg-config --variable=datarootdir wayland-protocols
+PROTDIR     := $(PROTDATADIR)/wayland-protocols
 
 PREFIX=/usr/local
 BINDIR=$(PREFIX)/bin
 
+CFLAGS=-Wall -Wextra -Wno-unused-parameter -Wno-parentheses
 LDFLAGS=-lrt -lm -lutil -lwayland-client -ltsm -lxkbcommon
 
-OBJ=xdg-shell.o glyph.o main.o
-GEN=xdg-shell.c xdg-shell.h
-
-all: $(GEN) havoc
-
-clean:
-	rm -f havoc $(GEN) $(OBJ)
+VPATH=$(PROTDIR)/stable/xdg-shell
+OBJ=xdg-shell.o gtk-primary-selection.o glyph.o main.o
+GEN=xdg-shell.c xdg-shell.h gtk-primary-selection.c gtk-primary-selection.h
 
 havoc: $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
@@ -22,10 +19,13 @@ havoc: $(OBJ)
 install: havoc
 	install havoc $(BINDIR)
 
-xdg-shell.c: $(PROTDIR)/stable/xdg-shell/xdg-shell.xml
-	$(SCANNER) code < $< > $@
+clean:
+	rm -f havoc $(GEN) $(OBJ)
 
-xdg-shell.h: $(PROTDIR)/stable/xdg-shell/xdg-shell.xml
+$(OBJ): $(GEN)
+
+%.c: %.xml
+	$(SCANNER) private-code < $< > $@
+
+%.h: %.xml
 	$(SCANNER) client-header < $< > $@
-
-.PHONY: all clean

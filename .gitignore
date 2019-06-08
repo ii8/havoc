@@ -1,4 +1,4 @@
 *.o
-*.swp
 xdg-shell.[ch]
+gtk-primary-selection.[ch]
 havoc

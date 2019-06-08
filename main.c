@@ -21,6 +21,7 @@
 #include <wayland-client-protocol.h>
 
 #include "xdg-shell.h"
+#include "gtk-primary-selection.h"
 
 typedef unsigned int uint;
 typedef unsigned char uchr;
@@ -36,7 +37,7 @@ static struct {
 	bool can_redraw;
 	int resize;
 
-	int master_fd;
+	int fd, master_fd;
 
 	struct wl_display *display;
 	struct wl_registry *registry;
@@ -75,6 +76,8 @@ static struct {
 	xkb_mod_index_t xkb_shift;
 
 	struct wl_keyboard *kbd;
+	struct wl_pointer *ptr;
+	int select;
 
 	struct {
 		int fd;
@@ -83,8 +86,27 @@ static struct {
 		struct itimerspec its;
 	} repeat;
 
+	wl_fixed_t ptr_x, ptr_y;
+
 	bool has_argb;
-	bool has_kbd;
+
+	struct gtk_primary_selection_device_manager *ps_dm;
+	struct gtk_primary_selection_device *ps_d;
+
+	struct {
+		struct gtk_primary_selection_source *source;
+		char *data;
+	} copy;
+
+	struct {
+		struct gtk_primary_selection_offer *offer;
+		bool acceptable;
+
+		int fd[2];
+		char buf[255];
+		size_t len;
+		bool active;
+	} paste;
 
 	struct {
 		char shell[32];
@@ -140,6 +162,150 @@ static void wcb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
 	if (write(term.master_fd, u8, len) < 0)
 		abort();
 }
+
+static void handle_display(int ev)
+{
+	if (ev & EPOLLHUP || ev & EPOLLERR) {
+		term.die = true;
+		return;
+	}
+
+	if (ev & EPOLLIN) {
+		if (wl_display_dispatch(term.display) < 0) {
+			term.die = true;
+			return;
+		}
+	}
+}
+
+static void handle_tty(int ev)
+{
+	char data[256];
+	int len;
+
+	if (ev & EPOLLHUP || ev & EPOLLERR) {
+		term.die = true;
+		return;
+	}
+
+	if (ev & EPOLLIN) {
+		term.need_redraw = true;
+		len = read(term.master_fd, data, sizeof(data));
+		if (len < 0)
+			term.die = true;
+		else
+			tsm_vte_input(term.vte, data, len);
+	}
+}
+
+static void handle_repeat(int ev)
+{
+	uint64_t exp;
+
+	if (read(term.repeat.fd, &exp, sizeof exp) < 0)
+		return;
+
+	tsm_vte_handle_keyboard(term.vte, term.repeat.sym, 0, term.mods,
+				term.repeat.unicode);
+}
+
+#define REPLACEMENT_CHAR 0x0000fffd
+
+static int utf8_to_utf32(char const **utf8, size_t *len, uint32_t *r)
+{
+	static unsigned char const tail_len[128] = {
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+		3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0
+	};
+	unsigned char tail, c = *(*utf8)++;
+
+	--(*len);
+	if (c < 0x80) {
+		*r = c;
+		return 0;
+	}
+
+	tail = tail_len[c - 0x80];
+
+	if (!tail) {
+		/* middle of a character or tail too long */
+		*r = REPLACEMENT_CHAR;
+		return 0;
+	} else if (tail > *len) {
+		/* need more input for a complete character */
+		++(*len), --(*utf8);
+		return 1;
+	}
+
+	/* remove length specification bits */
+	*r = c & 0x3f >> tail;
+
+	while (tail--) {
+		c = *(*utf8)++;
+		--(*len);
+		if ((c & 0xc0) != 0x80) {
+			*r = REPLACEMENT_CHAR;
+			++(*len), --(*utf8);
+			return 0;
+		}
+		*r = (*r << 6) + (c & 0x3f);
+	}
+	return 0;
+}
+
+static void end_paste()
+{
+	epoll_ctl(term.fd, EPOLL_CTL_DEL, term.paste.fd[0], NULL);
+	close(term.paste.fd[0]);
+	term.paste.len = 0;
+	term.paste.active = false;
+}
+
+static void handle_paste(int ev)
+{
+	if (ev & EPOLLHUP || ev & EPOLLERR) {
+		end_paste();
+		return;
+	}
+
+	if (ev & EPOLLIN) {
+		uint32_t code;
+		ssize_t len;
+		char const *p = &term.paste.buf[0];
+
+		len = read(term.paste.fd[0],
+			   term.paste.buf + term.paste.len,
+			   sizeof(term.paste.buf) - term.paste.len);
+
+		if (len <= 0) {
+			end_paste();
+			return;
+		}
+
+		term.need_redraw = true;
+		term.paste.len += len;
+		while (term.paste.len > 0) {
+			if (utf8_to_utf32(&p, &term.paste.len, &code)) {
+				memcpy(&term.paste.buf, p, term.paste.len);
+				break;
+			}
+			tsm_vte_handle_keyboard(term.vte, XKB_KEY_NoSymbol, 0, 0, code);
+		}
+	}
+}
+
+static struct epcb {
+	void (*f)(int);
+} dfp = { handle_display }
+, tfp = { handle_tty }
+, rfp = { handle_repeat }
+, pfp = { handle_paste };
 
 static void buf_release(void *data, struct wl_buffer *b)
 {
@@ -486,10 +652,191 @@ static struct wl_keyboard_listener kbd_listener = {
 	kbd_repeat
 };
 
+static void paste()
+{
+	struct epoll_event ee;
+
+	if (!term.paste.offer)
+		return;
+
+	if (term.paste.active)
+		end_paste();
+
+	if (pipe(term.paste.fd) < 0)
+		return;
+
+	gtk_primary_selection_offer_receive(term.paste.offer, "UTF8_STRING", term.paste.fd[1]);
+
+	ee.events = EPOLLIN;
+	ee.data.ptr = &pfp;
+	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.paste.fd[0], &ee);
+
+	term.paste.active = true;
+}
+
+static void pss_send(void *data,
+		     struct gtk_primary_selection_source *source,
+		     const char *mime_type,
+		     int32_t fd)
+{
+	write(fd, term.copy.data, strlen(term.copy.data));
+	close(fd);
+}
+
+static void pss_cancelled(void *data,
+			  struct gtk_primary_selection_source *source)
+{
+	gtk_primary_selection_source_destroy(term.copy.source);
+	gtk_primary_selection_device_set_selection(term.ps_d, NULL, 0);
+	free(term.copy.data);
+	term.copy.source = NULL;
+}
+
+static struct gtk_primary_selection_source_listener pss_listener = {
+	pss_send,
+	pss_cancelled
+};
+
+static inline uint grid_x()
+{
+	return wl_fixed_to_double(term.ptr_x) / term.cwidth;
+}
+
+static inline uint grid_y()
+{
+	return wl_fixed_to_double(term.ptr_y) / term.cheight;
+}
+
+static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
+		      uint32_t serial, struct wl_surface *surface,
+		      wl_fixed_t x, wl_fixed_t y)
+{
+	term.ptr_x = x;
+	term.ptr_y = y;
+}
+
+static void ptr_leave(void *data, struct wl_pointer *wl_pointer,
+		      uint32_t serial, struct wl_surface *surface)
+{
+}
+
+static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
+		       uint32_t time, wl_fixed_t x, wl_fixed_t y)
+{
+	term.ptr_x = x;
+	term.ptr_y = y;
+	switch (term.select) {
+	case 1:
+		if (term.copy.source) {
+			gtk_primary_selection_source_destroy(term.copy.source);
+			gtk_primary_selection_device_set_selection(term.ps_d, NULL, 0);
+			free(term.copy.data);
+			term.copy.source = NULL;
+		}
+
+		term.select = 2;
+		tsm_screen_selection_start(term.screen, grid_x(), grid_y());
+		term.need_redraw = true;
+		break;
+	case 2:
+		tsm_screen_selection_target(term.screen, grid_x(), grid_y());
+		term.need_redraw = true;
+	}
+}
+
+static void ptr_button(void *data, struct wl_pointer *wl_pointer,
+		       uint32_t serial, uint32_t time, uint32_t button,
+		       uint32_t state)
+{
+	if (button == 0x110) {
+		switch (state) {
+		case WL_POINTER_BUTTON_STATE_PRESSED:
+			if (term.select == 3) {
+				tsm_screen_selection_reset(term.screen);
+			}
+			term.select = 1;
+			break;
+		case WL_POINTER_BUTTON_STATE_RELEASED:
+			if (term.select == 2) {
+				term.copy.source = gtk_primary_selection_device_manager_create_source(term.ps_dm);
+				gtk_primary_selection_source_offer(term.copy.source, "UTF8_STRING");
+				gtk_primary_selection_source_add_listener(term.copy.source, &pss_listener, NULL);
+				gtk_primary_selection_device_set_selection(term.ps_d, term.copy.source, serial);
+				tsm_screen_selection_copy(term.screen, &term.copy.data);
+				term.select = 3;
+			} else {
+				term.select = 0;
+			}
+		}
+		term.need_redraw = true;
+	} else if (button == 0x112 && state == WL_POINTER_BUTTON_STATE_RELEASED) {
+		paste();
+	}
+}
+
+static void ptr_axis(void *data, struct wl_pointer *wl_pointer,
+		     uint32_t time, uint32_t axis, wl_fixed_t value)
+{
+	int v = wl_fixed_to_double(value) / 3;
+
+	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL)
+		return;
+
+	if (v > 0)
+		tsm_screen_sb_down(term.screen, v);
+	else
+		tsm_screen_sb_up(term.screen, -v);
+	term.need_redraw = true;
+}
+
+static void ptr_frame(void *data, struct wl_pointer *wl_pointer)
+{
+}
+
+static void ptr_axis_source(void *data, struct wl_pointer *wl_pointer,
+			    uint32_t axis_source)
+{
+}
+
+static void ptr_axis_stop(void *data, struct wl_pointer *wl_pointer,
+			  uint32_t time, uint32_t axis)
+{
+}
+
+static void ptr_axis_discrete(void *data, struct wl_pointer *wl_pointer,
+			      uint32_t axis, int32_t discrete)
+{
+}
+
+static struct wl_pointer_listener ptr_listener = {
+	ptr_enter,
+	ptr_leave,
+	ptr_motion,
+	ptr_button,
+	ptr_axis,
+	ptr_frame,
+	ptr_axis_source,
+	ptr_axis_stop,
+	ptr_axis_discrete
+};
+
 static void seat_capabilities(void *data, struct wl_seat *seat, uint32_t caps)
 {
-	if (caps & WL_SEAT_CAPABILITY_KEYBOARD)
-		term.has_kbd = true;
+	if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !term.kbd) {
+		term.kbd = wl_seat_get_keyboard(seat);
+		wl_keyboard_add_listener(term.kbd, &kbd_listener, NULL);
+	} else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && term.kbd) {
+		wl_keyboard_release(term.kbd);
+		term.kbd = NULL;
+	}
+
+	if ((caps & WL_SEAT_CAPABILITY_POINTER) && !term.ptr) {
+		term.ptr = wl_seat_get_pointer(term.seat);
+		wl_pointer_add_listener(term.ptr, &ptr_listener, NULL);
+	} else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && term.ptr) {
+		wl_pointer_release(term.ptr);
+		term.ptr = NULL;
+	}
 }
 
 static void seat_name(void *data, struct wl_seat *seat, const char *name)
@@ -499,6 +846,40 @@ static void seat_name(void *data, struct wl_seat *seat, const char *name)
 static struct wl_seat_listener seat_listener = {
 	seat_capabilities,
 	seat_name
+};
+
+static void pso_offer(void *data,
+		      struct gtk_primary_selection_offer *offer,
+		      const char *mime_type)
+{
+	if (strcmp(mime_type, "UTF8_STRING") == 0) {
+		term.paste.acceptable = true;
+	}
+}
+
+static struct gtk_primary_selection_offer_listener pso_listener = {
+	pso_offer
+};
+
+static void psd_data_offer(void *data,
+			   struct gtk_primary_selection_device *ps_d,
+			   struct gtk_primary_selection_offer *offer)
+{
+	term.paste.acceptable = false;
+	gtk_primary_selection_offer_add_listener(offer, &pso_listener, NULL);
+}
+
+static void psd_selection(void *data,
+			  struct gtk_primary_selection_device *ps_d,
+			  struct gtk_primary_selection_offer *id)
+{
+	if (term.paste.acceptable)
+		term.paste.offer = id;
+}
+
+static struct gtk_primary_selection_device_listener psd_listener = {
+	psd_data_offer,
+	psd_selection
 };
 
 static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
@@ -585,6 +966,9 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "wl_seat") == 0) {
 		term.seat = wl_registry_bind(r, id, &wl_seat_interface, 5);
 		wl_seat_add_listener(term.seat, &seat_listener, NULL);
+	} else if (strcmp(i, "gtk_primary_selection_device_manager") == 0) {
+		term.ps_dm = wl_registry_bind(r, id,
+			&gtk_primary_selection_device_manager_interface, 1);
 	}
 }
 
@@ -596,56 +980,6 @@ static const struct wl_registry_listener reg_listener = {
 	registry_get,
 	registry_loose
 };
-
-static void handle_display(int ev)
-{
-	if (ev & EPOLLHUP || ev & EPOLLERR) {
-		term.die = true;
-		return;
-	}
-
-	if (ev & EPOLLIN) {
-		if (wl_display_dispatch(term.display) < 0) {
-			term.die = true;
-			return;
-		}
-	}
-}
-
-static void handle_tty(int ev)
-{
-	char data[256];
-	int len;
-
-	if (ev & EPOLLHUP || ev & EPOLLERR) {
-		term.die = true;
-		return;
-	}
-
-	if (ev & EPOLLIN) {
-		term.need_redraw = true;
-		len = read(term.master_fd, data, sizeof(data));
-		if (len < 0)
-			term.die = true;
-		else
-			tsm_vte_input(term.vte, data, len);
-	}
-}
-
-static void handle_repeat(int ev)
-{
-	uint64_t exp;
-
-	if (read(term.repeat.fd, &exp, sizeof exp) < 0)
-		return;
-
-	tsm_vte_handle_keyboard(term.vte, term.repeat.sym, 0, term.mods,
-				term.repeat.unicode);
-}
-
-static struct epcb {
-	void (*f)(int);
-} dfp = { handle_display }, tfp = { handle_tty }, rfp = { handle_repeat };
 
 #define CONF_FILE "havoc.cfg"
 
@@ -711,7 +1045,7 @@ static void read_config(void)
 	FILE *f = open_config();
 	char *key, *val, *p, line[512];
 	enum section section = 0;
-	int i;
+	int i = 0;
 
 	if (f == NULL)
 		return;
@@ -781,7 +1115,7 @@ static void read_config(void)
 
 int main(int argc, char *argv[])
 {
-	int fd, display_fd;
+	int display_fd;
 	pid_t pid;
 	struct epoll_event ee[16];
 	int n, i, ret = 1;
@@ -821,7 +1155,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "failed to initialize tsm\n");
 		goto etsm;
 	}
-	tsm_screen_set_max_sb(term.screen, 100);
+	tsm_screen_set_max_sb(term.screen, 600);
 
 	if (tsm_vte_new(&term.vte, term.screen, wcb, NULL, log_tsm, NULL) < 0)
 		goto evte;
@@ -841,18 +1175,16 @@ int main(int argc, char *argv[])
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
 
-	if (term.seat && term.has_kbd) {
-		term.kbd = wl_seat_get_keyboard(term.seat);
-		if (term.kbd == NULL)
-			goto ekbd;
+	term.repeat.fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+	if (term.repeat.fd < 0) {
+		perror("failed to create repeat timer");
+		goto etimer;
+	}
 
-		wl_keyboard_add_listener(term.kbd, &kbd_listener, NULL);
-		term.repeat.fd = timerfd_create(CLOCK_MONOTONIC,
-						TFD_NONBLOCK | TFD_CLOEXEC);
-		if (term.repeat.fd < 0) {
-			perror("failed to create repeat timer");
-			goto etimer;
-		}
+	if (term.seat) {
+		term.ps_d = gtk_primary_selection_device_manager_get_device(
+			term.ps_dm, term.seat);
+		gtk_primary_selection_device_add_listener(term.ps_d, &psd_listener, NULL);
 	}
 
 	pid = forkpty(&term.master_fd, NULL, NULL, NULL);
@@ -866,19 +1198,18 @@ int main(int argc, char *argv[])
 	}
 	fcntl(term.master_fd, F_SETFL, O_NONBLOCK);
 	display_fd = wl_display_get_fd(term.display);
-	fd = epoll_create1(EPOLL_CLOEXEC);
-
-	ee[0].events = EPOLLIN | EPOLLHUP | EPOLLERR;
-	ee[0].data.ptr = &dfp;
-	epoll_ctl(fd, EPOLL_CTL_ADD, display_fd, &ee[0]);
-
-	ee[0].events = EPOLLIN | EPOLLHUP | EPOLLERR;
-	ee[0].data.ptr = &tfp;
-	epoll_ctl(fd, EPOLL_CTL_ADD, term.master_fd, &ee[0]);
+	term.fd = epoll_create1(EPOLL_CLOEXEC);
 
 	ee[0].events = EPOLLIN;
+
+	ee[0].data.ptr = &dfp;
+	epoll_ctl(term.fd, EPOLL_CTL_ADD, display_fd, &ee[0]);
+
+	ee[0].data.ptr = &tfp;
+	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.master_fd, &ee[0]);
+
 	ee[0].data.ptr = &rfp;
-	epoll_ctl(fd, EPOLL_CTL_ADD, term.repeat.fd, &ee[0]);
+	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.repeat.fd, &ee[0]);
 
 	while (!term.die) {
 		if (term.can_redraw && term.need_redraw && term.configured)
@@ -887,7 +1218,7 @@ int main(int argc, char *argv[])
 		if (wl_display_flush(term.display) < 0)
 			goto eflush;
 
-		n = epoll_wait(fd, ee, 16, -1);
+		n = epoll_wait(term.fd, ee, 16, -1);
 		for (i = 0; i < n; i++) {
 			void (*f)(int) = ((struct epcb *)ee[i].data.ptr)->f;
 			f(ee[i].events);
@@ -908,9 +1239,13 @@ eflush:
 etty:
 	close(term.repeat.fd);
 etimer:
+	if (term.ps_d)
+		gtk_primary_selection_device_destroy(term.ps_d);
+	if (term.ptr)
+		wl_pointer_release(term.ptr);
 	if (term.kbd)
 		wl_keyboard_release(term.kbd);
-ekbd:
+
 	xdg_toplevel_destroy(term.toplvl);
 etoplvl:
 	xdg_surface_destroy(term.xdgsurf);
@@ -922,6 +1257,8 @@ evte:
 	tsm_screen_unref(term.screen);
 etsm:
 eglobals:
+	if (term.ps_dm)
+		gtk_primary_selection_device_manager_destroy(term.ps_dm);
 	if (term.seat)
 		wl_seat_destroy(term.seat);
 	if (term.wm_base)
@@ -940,6 +1277,5 @@ econnect:
 exkb:
 	font_deinit();
 efont:
-	fprintf(stderr, "Clean exit\n");
 	return ret;
 }

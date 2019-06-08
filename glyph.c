@@ -249,7 +249,7 @@ static int find_index(const struct font *f, uint32_t codepoint)
 		return 0; /* not found */
 	}
 	/* TODO */
-	assert(0);
+	fputs("glyph: TODO format\n", stderr);
 	return 0;
 }
 
@@ -497,7 +497,7 @@ static int glyph_shape(const struct font *f, int glyph_index,
 				}
 			} else {
 				/* TODO handle matching point */
-				assert(0);
+				fputs("glyph: TODO handle matching point\n", stderr);
 			}
 
 			if (flags & 1 << 3) {
