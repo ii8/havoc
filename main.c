@@ -114,6 +114,7 @@ static struct {
 		uchr opacity;
 		int font_size;
 		char font_path[512];
+		uint8_t colors[TSM_COLOR_NUM][3];
 	} cfg;
 } term = {
 	.cfg.shell = "/bin/sh",
@@ -121,7 +122,27 @@ static struct {
 	.cfg.row = 24,
 	.cfg.opacity = 0xff,
 	.cfg.font_size = 18,
-	.cfg.font_path = ""
+	.cfg.font_path = "",
+	.cfg.colors = {
+		[TSM_COLOR_BLACK]         = {   0,   0,   0 },
+		[TSM_COLOR_RED]           = { 205,   0,   0 },
+		[TSM_COLOR_GREEN]         = {   0, 205,   0 },
+		[TSM_COLOR_YELLOW]        = { 205, 205,   0 },
+		[TSM_COLOR_BLUE]          = {   0,   0, 238 },
+		[TSM_COLOR_MAGENTA]       = { 205,   0, 205 },
+		[TSM_COLOR_CYAN]          = {   0, 205, 205 },
+		[TSM_COLOR_LIGHT_GREY]    = { 229, 229, 229 },
+		[TSM_COLOR_DARK_GREY]     = { 127, 127, 127 },
+		[TSM_COLOR_LIGHT_RED]     = { 255,   0,   0 },
+		[TSM_COLOR_LIGHT_GREEN]   = {   0, 255,   0 },
+		[TSM_COLOR_LIGHT_YELLOW]  = { 255, 255,   0 },
+		[TSM_COLOR_LIGHT_BLUE]    = {  92,  92, 255 },
+		[TSM_COLOR_LIGHT_MAGENTA] = { 255,   0, 255 },
+		[TSM_COLOR_LIGHT_CYAN]    = {   0, 255, 255 },
+		[TSM_COLOR_WHITE]         = { 255, 255, 255 },
+		[TSM_COLOR_FOREGROUND]    = { 229, 229, 229 },
+		[TSM_COLOR_BACKGROUND]    = {   0,   0,   0 },
+	}
 };
 
 static const char *sev2str_table[] = {
@@ -987,11 +1008,6 @@ static const struct wl_registry_listener reg_listener = {
 
 #define CONF_FILE "havoc.cfg"
 
-enum section {
-	SECTION_GENERAL = 1,
-	SECTION_FONT
-};
-
 static int clip(int a, int b, int c)
 {
 	return a < b ? b : a > c ? c : a;
@@ -1016,6 +1032,41 @@ static void font_config(char *key, char *val)
 	else if (strcmp(key, "path") == 0)
 		strncpy(term.cfg.font_path, val,
 			sizeof(term.cfg.font_path) - 1);
+}
+
+static void set_color(enum tsm_vte_color field, uint32_t val)
+{
+	term.cfg.colors[field][2] = val;
+	term.cfg.colors[field][1] = val >> 8;
+	term.cfg.colors[field][0] = val >> 16;
+}
+
+static void color_config(char *key, char *val)
+{
+	uint32_t color;
+	char *p;
+
+	if (*val == '#') {
+		color = strtol(++val, &p, 16);
+		if (*p != '\0')
+			goto invalid;
+	} else {
+		goto invalid;
+	}
+
+	if (strcmp(key, "foreground") == 0) {
+		set_color(TSM_COLOR_FOREGROUND, color);
+	} else if (strcmp(key, "background") == 0) {
+		set_color(TSM_COLOR_BACKGROUND, color);
+	} else if (strstr(key, "color") == key) {
+		long int i = strtol(key + 5, &p, 10);
+		if (*p == '\0' && i >= 0 && i < 16)
+			set_color(i, color);
+	}
+	return;
+
+invalid:
+	fprintf(stderr, "invalid color for %s", key);
 }
 
 static FILE *open_config(void)
@@ -1048,7 +1099,7 @@ static void read_config(void)
 {
 	FILE *f = open_config();
 	char *key, *val, *p, line[512];
-	enum section section = 0;
+	void (*section)(char *, char *) = &general_config;
 	int i = 0;
 
 	if (f == NULL)
@@ -1074,9 +1125,11 @@ static void read_config(void)
 			++key;
 
 			if (strcmp(key, "general") == 0)
-				section = SECTION_GENERAL;
+				section = &general_config;
 			else if (strcmp(key, "font") == 0)
-				section = SECTION_FONT;
+				section = &font_config;
+			else if (strcmp(key, "colors") == 0)
+				section = &color_config;
 
 			continue;
 		default:
@@ -1103,14 +1156,7 @@ static void read_config(void)
 				--p;
 			}
 
-			switch (section) {
-			case SECTION_GENERAL:
-				general_config(key, val);
-				break;
-			case SECTION_FONT:
-				font_config(key, val);
-				break;
-			}
+			section(key, val);
 		}
 	}
 
@@ -1163,6 +1209,7 @@ int main(int argc, char *argv[])
 
 	if (tsm_vte_new(&term.vte, term.screen, wcb, NULL, log_tsm, NULL) < 0)
 		goto evte;
+	tsm_vte_set_palette(term.vte, term.cfg.colors);
 
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)
