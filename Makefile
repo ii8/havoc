@@ -7,19 +7,20 @@ PREFIX=/usr/local
 BINDIR=$(PREFIX)/bin
 
 CFLAGS=-Wall -Wextra -Wno-unused-parameter -Wno-parentheses
-LDFLAGS=-lrt -lm -lutil -lwayland-client -ltsm -lxkbcommon
+LDFLAGS=-lrt -lm -lutil -lwayland-client -lxkbcommon -Ltsm -lhtsm
 
 VPATH=$(PROTDIR)/stable/xdg-shell
 OBJ=xdg-shell.o gtk-primary-selection.o glyph.o main.o
 GEN=xdg-shell.c xdg-shell.h gtk-primary-selection.c gtk-primary-selection.h
 
-havoc: $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+havoc: tsm $(OBJ)
+	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDFLAGS)
 
 install: havoc
 	install havoc $(BINDIR)
 
 clean:
+	$(MAKE) -C tsm clean
 	rm -f havoc $(GEN) $(OBJ)
 
 $(OBJ): $(GEN)
@@ -29,3 +30,8 @@ $(OBJ): $(GEN)
 
 %.h: %.xml
 	$(SCANNER) client-header < $< > $@
+
+tsm:
+	$(MAKE) -C $@
+
+.PHONY: install clean tsm

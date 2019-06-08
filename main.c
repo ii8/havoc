@@ -15,11 +15,11 @@
 #include <unistd.h>
 #include <pty.h>
 
-#include <libtsm.h>
 #include <xkbcommon/xkbcommon.h>
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
 
+#include "tsm/libtsm.h"
 #include "xdg-shell.h"
 #include "gtk-primary-selection.h"
 
@@ -368,6 +368,8 @@ static int new_buffer(struct buffer *buf)
 	wl_shm_pool_destroy(pool);
 	close(fd);
 
+	buf->age = 0;
+
 	return 0;
 }
 
@@ -444,7 +446,7 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 	struct buffer *buffer = data;
 	uint32_t bg, fg, *dst = buffer->data;
 
-	if (age <= buffer->age && !term.resize)
+	if (age && age <= buffer->age)
 		return 0;
 
 	dst = &dst[y * term.cheight * term.width + x * term.cwidth];
@@ -487,6 +489,8 @@ static void redraw()
 
 	wl_surface_attach(term.surf, buffer->b, 0, 0);
 	buffer->age = tsm_screen_draw(term.screen, draw_cell, buffer);
+	if (buffer->age == 0)
+		term.buf[0].age = term.buf[1].age = 0;
 	wl_surface_damage(term.surf, 0, 0, term.width, term.height);
 
 	term.cb = wl_surface_frame(term.surf);
