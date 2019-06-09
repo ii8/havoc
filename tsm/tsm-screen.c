@@ -487,7 +487,7 @@ int tsm_screen_new(struct tsm_screen **out, tsm_log_t log, void *log_data)
 	if (ret)
 		goto err_free;
 
-	ret = tsm_screen_resize(con, 80, 24);
+	ret = tsm_screen_resize(con, 80, 1);
 	if (ret)
 		goto err_free;
 

@@ -103,10 +103,15 @@ static struct {
 		bool acceptable;
 
 		int fd[2];
-		char buf[255];
+		char buf[200];
 		size_t len;
 		bool active;
 	} paste;
+
+	struct {
+		bool linger;
+		char *config;
+	} opt;
 
 	struct {
 		char shell[32];
@@ -180,23 +185,18 @@ static void log_tsm(void *data,
 
 static void wcb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
 {
-	if (write(term.master_fd, u8, len) < 0)
+	if (term.master_fd >= 0 && write(term.master_fd, u8, len) < 0) {
+		fprintf(stderr, "could not write to pty master: %m\n");
 		abort();
+	}
 }
 
 static void handle_display(int ev)
 {
-	if (ev & EPOLLHUP || ev & EPOLLERR) {
+	if (ev & EPOLLIN)
+		wl_display_dispatch(term.display);
+	else if (ev & EPOLLHUP)
 		term.die = true;
-		return;
-	}
-
-	if (ev & EPOLLIN) {
-		if (wl_display_dispatch(term.display) < 0) {
-			term.die = true;
-			return;
-		}
-	}
 }
 
 static void handle_tty(int ev)
@@ -204,18 +204,22 @@ static void handle_tty(int ev)
 	char data[256];
 	int len;
 
-	if (ev & EPOLLHUP || ev & EPOLLERR) {
-		term.die = true;
-		return;
-	}
-
 	if (ev & EPOLLIN) {
 		term.need_redraw = true;
 		len = read(term.master_fd, data, sizeof(data));
-		if (len < 0)
-			term.die = true;
-		else
+		assert(len);
+		if (len < 0) {
+			fprintf(stderr, "could not read from pty: %m\n");
+			abort();
+		} else {
 			tsm_vte_input(term.vte, data, len);
+		}
+	} else if (ev & EPOLLHUP) {
+		epoll_ctl(term.fd, EPOLL_CTL_DEL, term.master_fd, NULL);
+		close(term.master_fd);
+		term.master_fd = -1;
+		if (!term.opt.linger)
+			term.die = true;
 	}
 }
 
@@ -290,11 +294,6 @@ static void end_paste()
 
 static void handle_paste(int ev)
 {
-	if (ev & EPOLLHUP || ev & EPOLLERR) {
-		end_paste();
-		return;
-	}
-
 	if (ev & EPOLLIN) {
 		uint32_t code;
 		ssize_t len;
@@ -318,6 +317,8 @@ static void handle_paste(int ev)
 			}
 			tsm_vte_handle_keyboard(term.vte, XKB_KEY_NoSymbol, 0, 0, code);
 		}
+	} else if (ev & EPOLLHUP) {
+		end_paste();
 	}
 }
 
@@ -931,26 +932,25 @@ static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
 	xdg_surface_ack_configure(surf, serial);
 	int col = term.confwidth / term.cwidth;
 	int row = term.confheight / term.cheight;
+	struct winsize ws = {
+		row, col, 0, 0
+	};
 
 	assert(!term.configured);
-
-	if (col && row && (term.col != col || term.row != row)) {
-		struct winsize ws = {
-			row, col, 0, 0
-		};
-
-		tsm_screen_resize(term.screen, col, row);
-		if (ioctl(term.master_fd, TIOCSWINSZ, &ws) < 0)
-			fprintf(stderr, "failed to resize pty %s",
-				strerror(errno));
-		term.col = col;
-		term.row = row;
-		term.width = col * term.cwidth;
-		term.height = row * term.cheight;
-		term.need_redraw = true;
-		term.resize = 2;
-	}
 	term.configured = true;
+
+	if (col == 0 || row == 0 || (term.col == col && term.row == row))
+		return;
+
+	tsm_screen_resize(term.screen, col, row);
+	if (term.master_fd >= 0 && ioctl(term.master_fd, TIOCSWINSZ, &ws) < 0)
+		fprintf(stderr, "could not resize pty: %m\n");
+	term.col = col;
+	term.row = row;
+	term.width = col * term.cwidth;
+	term.height = row * term.cheight;
+	term.need_redraw = true;
+	term.resize = 2;
 }
 
 static const struct xdg_surface_listener surf_listener = {
@@ -1005,6 +1005,31 @@ static const struct wl_registry_listener reg_listener = {
 	registry_get,
 	registry_loose
 };
+
+void setup_pty(char *argv[])
+{
+	pid_t pid = forkpty(&term.master_fd, NULL, NULL, NULL);
+
+	if (pid < 0) {
+		fprintf(stderr, "forkpty failed: %m");
+		exit(EXIT_FAILURE);
+	} else if (pid == 0) {
+		char *prog;
+		setenv("TERM", "xterm-256color", 1);
+		if (*argv) {
+			execvp(*argv, argv);
+			prog = *argv;
+		} else {
+			execl(term.cfg.shell, term.cfg.shell, NULL);
+			prog = term.cfg.shell;
+		}
+		fprintf(stderr, "could not execute %s: %m", prog);
+		pause();
+		exit(EXIT_FAILURE);
+	}
+	fcntl(term.master_fd, F_SETFL, O_NONBLOCK);
+}
+
 
 #define CONF_FILE "havoc.cfg"
 
@@ -1074,6 +1099,15 @@ static FILE *open_config(void)
 	char *dir;
 	char path[512];
 	FILE *f;
+
+	if (term.opt.config) {
+		f = fopen(term.opt.config, "r");
+		if (f == NULL)
+			fprintf(stderr, "could not open '%s': %m, "
+				"using default configuration\n",
+				term.opt.config);
+		return f;
+	}
 
 	dir = getenv("XDG_CONFIG_HOME");
 	if (dir) {
@@ -1163,14 +1197,41 @@ static void read_config(void)
 	fclose(f);
 }
 
+static void usage(void)
+{
+	printf("usage: havoc [option...] [program [args...]]\n\n"
+	       "  -c <file>   Specify configuration file.\n"
+	       "  -l          Keep window open after the child process exits.\n"
+	       "  -h          Show this help.\n");
+	exit(EXIT_SUCCESS);
+}
+
 int main(int argc, char *argv[])
 {
 	int display_fd;
-	pid_t pid;
 	struct epoll_event ee[16];
 	int n, i, ret = 1;
 
+	while (++argv, *argv && **argv == '-') {
+retry:
+		switch (*++*argv) {
+		case 'c':
+			term.opt.config = *++argv;
+			break;
+		case 'l':
+			term.opt.linger = true;
+			break;
+		case 'h':
+			usage();
+			break;
+		case '-':
+			goto retry;
+		default:
+			fprintf(stderr, "unrecognized command line option '%s'\n", *argv);
+		}
+	}
 	read_config();
+	setup_pty(argv);
 
 	if (font_init(term.cfg.font_size, term.cfg.font_path,
 		      &term.cwidth, &term.cheight) < 0)
@@ -1228,7 +1289,7 @@ int main(int argc, char *argv[])
 
 	term.repeat.fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
 	if (term.repeat.fd < 0) {
-		perror("failed to create repeat timer");
+		fprintf(stderr, "could not create key repeat timer: %m");
 		goto etimer;
 	}
 
@@ -1238,16 +1299,6 @@ int main(int argc, char *argv[])
 		gtk_primary_selection_device_add_listener(term.ps_d, &psd_listener, NULL);
 	}
 
-	pid = forkpty(&term.master_fd, NULL, NULL, NULL);
-	if (pid < 0) {
-		goto etty;
-	} else if (pid == 0) {
-		setenv("TERM", "xterm-256color", 1);
-		if (execl(term.cfg.shell, term.cfg.shell, NULL)) {
-			exit(EXIT_FAILURE);
-		}
-	}
-	fcntl(term.master_fd, F_SETFL, O_NONBLOCK);
 	display_fd = wl_display_get_fd(term.display);
 	term.fd = epoll_create1(EPOLL_CLOEXEC);
 
@@ -1266,8 +1317,7 @@ int main(int argc, char *argv[])
 		if (term.can_redraw && term.need_redraw && term.configured)
 			redraw();
 
-		if (wl_display_flush(term.display) < 0)
-			goto eflush;
+		wl_display_flush(term.display);
 
 		n = epoll_wait(term.fd, ee, 16, -1);
 		for (i = 0; i < n; i++) {
@@ -1278,16 +1328,13 @@ int main(int argc, char *argv[])
 
 	ret = 0;
 
-eflush:
-	if (term.buf[0].b) {
+	if (term.buf[0].b)
 		wl_buffer_destroy(term.buf[0].b);
-	}
-	if (term.buf[1].b) {
+	if (term.buf[1].b)
 		wl_buffer_destroy(term.buf[1].b);
-	}
 	if (term.cb)
 		wl_callback_destroy(term.cb);
-etty:
+
 	close(term.repeat.fd);
 etimer:
 	if (term.ps_d)

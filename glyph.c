@@ -1458,7 +1458,7 @@ static uint8_t *open_font(char *path)
 	file = fopen(path, "r");
 
 	if (file == NULL) {
-		perror("could not open font");
+		fprintf(stderr, "could not open font: %m\n");
 		return NULL;
 	}
 
@@ -1486,10 +1486,8 @@ int font_init(int size, char *path, int *w, int *h)
 	uint8_t *buf;
 
 	buf = open_font(path);
-	if (buf == NULL) {
-		fputs("using fallback font\n", stderr);
+	if (buf == NULL)
 		buf = &fallback[0];
-	}
 
 	if (setup(&font, buf, 0) < 0) {
 		if (font.is_file)
