@@ -137,7 +137,7 @@ static unsigned int copy_line(struct line *line, char *buf,
 
 	end = start + len;
 	for (i = start; i < line->size && i < end; ++i) {
-		if (i < line->size || !line->cells[i].ch)
+		if (line->cells[i].ch)
 			pos += tsm_ucs4_to_utf8(line->cells[i].ch, pos);
 		else
 			pos += tsm_ucs4_to_utf8(' ', pos);
