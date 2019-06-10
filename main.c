@@ -749,6 +749,9 @@ static void ptr_leave(void *data, struct wl_pointer *wl_pointer,
 static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
 		       uint32_t time, wl_fixed_t x, wl_fixed_t y)
 {
+	if (!term.ps_dm)
+		return;
+
 	term.ptr_x = x;
 	term.ptr_y = y;
 	switch (term.select) {
@@ -774,6 +777,9 @@ static void ptr_button(void *data, struct wl_pointer *wl_pointer,
 		       uint32_t serial, uint32_t time, uint32_t button,
 		       uint32_t state)
 {
+	if (!term.ps_dm)
+		return;
+
 	if (button == 0x110) {
 		switch (state) {
 		case WL_POINTER_BUTTON_STATE_PRESSED:
@@ -1251,8 +1257,13 @@ retry:
 	wl_registry_add_listener(term.registry, &reg_listener, NULL);
 
 	wl_display_roundtrip(term.display);
-	if (!term.cp || !term.shm || !term.wm_base) {
+	if (!term.cp || !term.shm) {
 		fprintf(stderr, "missing required globals\n");
+		goto eglobals;
+	}
+	if (!term.wm_base) {
+		fprintf(stderr, "your compositor does not support xdg_wm_base,"
+			" make sure you have the latest version.\n");
 		goto eglobals;
 	}
 
@@ -1293,7 +1304,7 @@ retry:
 		goto etimer;
 	}
 
-	if (term.seat) {
+	if (term.ps_dm && term.seat) {
 		term.ps_d = gtk_primary_selection_device_manager_get_device(
 			term.ps_dm, term.seat);
 		gtk_primary_selection_device_add_listener(term.ps_d, &psd_listener, NULL);

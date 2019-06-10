@@ -57,7 +57,6 @@
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
-#include <wchar.h>
 #include "libtsm.h"
 #include "libtsm-int.h"
 #include "shl-array.h"
@@ -311,8 +310,8 @@ err_id:
 	return sym;
 }
 
-unsigned int tsm_symbol_get_width(struct tsm_symbol_table *tbl,
-				  tsm_symbol_t sym)
+int tsm_symbol_get_width(struct tsm_symbol_table *tbl,
+			 tsm_symbol_t sym)
 {
 	const uint32_t *ch;
 	size_t len;
@@ -324,7 +323,7 @@ unsigned int tsm_symbol_get_width(struct tsm_symbol_table *tbl,
 	if (len == 0)
 		return 0;
 
-	return wcwidth(*ch);
+	return tsm_wcwidth(*ch);
 }
 
 /*

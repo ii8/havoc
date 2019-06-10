@@ -7,12 +7,17 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <math.h>
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 
 #include "fallback.h"
+
+#ifdef DEBUG_GLYPH
+#include <assert.h>
+#else
+#define assert(x) (void)0
+#endif
 
 struct node {
 	bool red;
@@ -497,7 +502,6 @@ static int glyph_shape(const struct font *f, int glyph_index,
 				}
 			} else {
 				/* TODO handle matching point */
-				fputs("glyph: TODO handle matching point\n", stderr);
 			}
 
 			if (flags & 1 << 3) {
@@ -634,7 +638,7 @@ static void *hheap_alloc(struct hheap *hh, size_t size)
 			hh->num_in_head_chunk = count;
 		}
 		--hh->num_in_head_chunk;
-		return (char *)(hh->head) + size * hh->num_in_head_chunk;
+		return (char *)(hh->head) + sizeof(struct hheap_chunk) + size * hh->num_in_head_chunk;
 	}
 }
 

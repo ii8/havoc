@@ -1,7 +1,7 @@
 
 CFLAGS=-Wall -Wextra -Wno-unused-parameter -Wno-parentheses -Wno-sign-compare
 
-OBJ=shl-htable.o\
+OBJ=wcwidth.o shl-htable.o\
 	tsm-render.o tsm-screen.o tsm-selection.o\
 	tsm-unicode.o tsm-vte-charsets.o tsm-vte.o
 

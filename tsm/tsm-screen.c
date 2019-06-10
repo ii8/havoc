@@ -1065,14 +1065,19 @@ SHL_EXPORT
 void tsm_screen_write(struct tsm_screen *con, tsm_symbol_t ch,
 			  const struct tsm_screen_attr *attr)
 {
-	unsigned int last, len;
+	unsigned int last;
+	int len;
 
 	if (!con)
 		return;
 
 	len = tsm_symbol_get_width(con->sym_table, ch);
-	if (!len)
+	if (!len) {
 		return;
+	} else if (len < 0) {
+		ch = 0x0000fffd;
+		len = 1;
+	}
 
 	screen_inc_age(con);
 

@@ -37,6 +37,8 @@
 /* max combined-symbol length */
 #define TSM_UCS4_MAXLEN 10
 
+int tsm_wcwidth(wchar_t wc);
+
 /* symbols */
 
 struct tsm_symbol_table;
@@ -52,8 +54,7 @@ tsm_symbol_t tsm_symbol_append(struct tsm_symbol_table *tbl,
 			       tsm_symbol_t sym, uint32_t ucs4);
 const uint32_t *tsm_symbol_get(struct tsm_symbol_table *tbl,
 			       tsm_symbol_t *sym, size_t *size);
-unsigned int tsm_symbol_get_width(struct tsm_symbol_table *tbl,
-				  tsm_symbol_t sym);
+int tsm_symbol_get_width(struct tsm_symbol_table *tbl, tsm_symbol_t sym);
 
 /* utf8 state machine */
 
