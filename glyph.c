@@ -470,18 +470,15 @@ static int glyph_shape(const struct font *f, int glyph_index,
 				     sx, sy, scx, scy, cx, cy);
 	} else if (ncontours == -1) {
 		/* Compound shapes */
-		int more = 1;
+		uint16_t flags = (1 << 5);
 		uint8_t *comp = f->data + g + 10;
 		vcount = 0;
 		vertices = 0;
-		while (more) {
-			uint16_t flags, gidx;
+		while (flags & (1 << 5)) {
+			uint16_t gidx;
 			int comp_num_verts = 0, i;
 			struct vertex *comp_verts = 0, *tmp = 0;
 			float mtx[6] = { 1, 0, 0, 1, 0, 0 }, m, n;
-
-			// More components ?
-			more = flags & (1 << 5);
 
 			flags = read_short(comp);
 			comp += 2;
