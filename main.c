@@ -353,8 +353,8 @@ static int new_buffer(struct buffer *buf)
 		munmap(buf->data, buf->size);
 	}
 
-	stride = term.width * 4;
-	buf->size = stride * term.height;
+	stride = term.confwidth * 4;
+	buf->size = stride * term.confheight;
 
 	srand(time(NULL));
 	do {
@@ -384,7 +384,7 @@ static int new_buffer(struct buffer *buf)
 	}
 
 	pool = wl_shm_create_pool(term.shm, fd, buf->size);
-	buf->b = wl_shm_pool_create_buffer(pool, 0, term.width, term.height,
+	buf->b = wl_shm_pool_create_buffer(pool, 0, term.confwidth, term.confheight,
 					   stride, WL_SHM_FORMAT_ARGB8888);
 	wl_buffer_add_listener(buf->b, &buf_listener, buf);
 	wl_shm_pool_destroy(pool);
@@ -425,7 +425,7 @@ static void blank(uint32_t *dst, uint w, uint32_t bg)
 	while (h--) {
 		for (i = 0; i < w; ++i)
 			dst[i] = bg;
-		dst += term.width;
+		dst += term.confwidth;
 	}
 }
 
@@ -456,7 +456,7 @@ static void print(uint32_t *dst, uint w, uint32_t bg, uint32_t fg, uchr *glyph)
 		}
 
 		glyph += w;
-		dst += term.width;
+		dst += term.confwidth;
 	}
 }
 
@@ -471,7 +471,7 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 	if (age && age <= buffer->age)
 		return 0;
 
-	dst = &dst[y * term.cheight * term.width + x * term.cwidth];
+	dst = &dst[y * term.cheight * term.confwidth + x * term.cwidth];
 
 	if (a->inverse) {
 		bg = term.cfg.opacity << 24 | a->fr << 16 | a->fg << 8 | a->fb;
@@ -513,7 +513,7 @@ static void redraw()
 	buffer->age = tsm_screen_draw(term.screen, draw_cell, buffer);
 	if (buffer->age == 0)
 		term.buf[0].age = term.buf[1].age = 0;
-	wl_surface_damage(term.surf, 0, 0, term.width, term.height);
+	wl_surface_damage(term.surf, 0, 0, term.confwidth, term.confheight);
 
 	term.cb = wl_surface_frame(term.surf);
 	wl_callback_add_listener(term.cb, &frame_listener, NULL);
