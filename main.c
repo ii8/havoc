@@ -193,10 +193,12 @@ static void wcb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
 
 static void handle_display(int ev)
 {
-	if (ev & EPOLLIN)
-		wl_display_dispatch(term.display);
-	else if (ev & EPOLLHUP)
+	if (ev & EPOLLIN) {
+		if (wl_display_dispatch(term.display) < 0)
+			term.die = true;
+	} else if (ev & EPOLLHUP) {
 		term.die = true;
+	}
 }
 
 static void handle_tty(int ev)
@@ -1333,6 +1335,8 @@ retry:
 		n = epoll_wait(term.fd, ee, 16, -1);
 		for (i = 0; i < n; i++) {
 			void (*f)(int) = ((struct epcb *)ee[i].data.ptr)->f;
+			if (ee[i].events & EPOLLERR)
+				abort();
 			f(ee[i].events);
 		}
 	}
