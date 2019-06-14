@@ -11,6 +11,11 @@
 #include <string.h>
 #include <stdbool.h>
 
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
 #include "fallback.h"
 
 #ifdef DEBUG_GLYPH
@@ -30,6 +35,9 @@ static struct node leaf = { false, { NULL, NULL }, 0, NULL };
 
 struct font {
 	unsigned char *data;
+	size_t size;
+	bool mmapped;
+
 	int fontstart;
 
 	int num_glyphs;
@@ -46,9 +54,9 @@ struct font {
 	float scale;
 
 	struct node *cache;
-
-	bool is_file;
 };
+
+static struct font font;
 
 enum {
 	VMOVE = 1,
@@ -78,16 +86,31 @@ struct bitmap {
 
 static uint16_t read_ushort(const uint8_t *p)
 {
+	if (p < font.data || p + 1 > font.data + font.size - 1) {
+		fprintf(stderr, "font file is corrupt\n");
+		return 0;
+	}
+
 	return (p[0] << 8) + p[1];
 }
 
 static int16_t read_short(const uint8_t *p)
 {
+	if (p < font.data || p + 1 > font.data + font.size - 1) {
+		fprintf(stderr, "font file is corrupt\n");
+		return 0;
+	}
+
 	return (p[0] << 8) + p[1];
 }
 
 static uint32_t read_ulong(const uint8_t *p)
 {
+	if (p < font.data || p + 3 > font.data + font.size - 1) {
+		fprintf(stderr, "font file is corrupt\n");
+		return 0;
+	}
+
 	return p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3];
 }
 
@@ -106,12 +129,13 @@ static uint32_t find_table(uint8_t *data, uint32_t fontstart, const char *tag)
 	return 0;
 }
 
-static int setup(struct font *f, uint8_t *data, int fontstart)
+static int setup(struct font *f, int fontstart)
 {
 	uint32_t cmap, t;
 	int32_t i, num_tables;
+	uint8_t *data;
 
-	f->data = data;
+	data = f->data;
 	f->fontstart = fontstart;
 
 	cmap = find_table(data, fontstart, "cmap");
@@ -1272,8 +1296,6 @@ static void render(struct bitmap *result, float flatness_in_pixels,
 	}
 }
 
-static struct font font;
-
 static short get_bearing(struct font *f, int glyph)
 {
 	if (glyph < f->num_metrics)
@@ -1446,53 +1468,56 @@ static int get_width(struct font *f)
 	return advance;
 }
 
-static uint8_t *open_font(char *path)
+static void open_font(char *path)
 {
-	size_t read;
-	long file_size;
-	FILE *file;
-	uint8_t *buf;
+	int fd;
+	struct stat st;
 
 	if (path == NULL || *path == '\0')
-		return NULL;
+		goto fb;
 
-	file = fopen(path, "r");
-
-	if (file == NULL) {
-		fprintf(stderr, "could not open font: %m\n");
-		return NULL;
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		fprintf(stderr, "could not open font file: %m\n");
+		goto fb;
 	}
 
-	fseek(file, 0, SEEK_END);
-	file_size = ftell(file);
-	fseek(file, 0, SEEK_SET);
+	if (fstat(fd, &st) < 0) {
+		fprintf(stderr, "could not fstat font file: %m\n");
+		close(fd);
+		goto fb;
+	}
 
-	buf = malloc(file_size);
-	if (buf == NULL)
-		return NULL;
+	font.size = st.st_size;
+	font.data = mmap(NULL, font.size, PROT_READ, MAP_PRIVATE, fd, 0);
+	close(fd);
+	if (font.data == MAP_FAILED) {
+		fprintf(stderr, "could not mmap font file: %m\n");
+		goto fb;
+	}
+	font.mmapped = true;
+	return;
 
-	read = fread(buf, 1, file_size, file);
-	fclose(file);
+fb:
+	font.size = sizeof(fallback);
+	font.data = &fallback[0];
+	font.mmapped = false;
+}
 
-	if (read != (unsigned long)file_size)
-		return free(buf), NULL;
-
-	font.is_file = true;
-	return buf;
+static void close_font(void)
+{
+	if (font.mmapped)
+		munmap(font.data, font.size);
 }
 
 int font_init(int size, char *path, int *w, int *h)
 {
 	int descent, linegap;
-	uint8_t *buf;
 
-	buf = open_font(path);
-	if (buf == NULL)
-		buf = &fallback[0];
+	open_font(path);
 
-	if (setup(&font, buf, 0) < 0) {
-		if (font.is_file)
-			free(buf);
+	if (setup(&font, 0) < 0) {
+		close_font();
 		return -1;
 	}
 
@@ -1520,6 +1545,5 @@ int font_init(int size, char *path, int *w, int *h)
 void font_deinit(void)
 {
 	delete_cache(font.cache);
-	if (font.is_file)
-		free(font.data);
+	close_font();
 }
