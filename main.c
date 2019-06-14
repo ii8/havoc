@@ -460,6 +460,21 @@ static void print(uint32_t *dst, uint w, uint32_t bg, uint32_t fg, uchr *glyph)
 	}
 }
 
+static void clear_buffer(struct buffer *buffer)
+{
+	uint32_t bg = 0xFFFFFF, *dst = buffer->data;
+
+    // TODO do something with buf->size?
+    for (uint32_t i = 0; i < term.confheight*term.confwidth; ++i) {
+        dst[i] = bg;
+    }
+    /* for (int y = 0; y < term.confheight; ++y) { */
+    /*     for (int x = 0; x < term.confwidth; ++x) { */
+    /*         dst[y*term.confwidth + x] = bg; */
+    /*     } */
+    /* } */
+}
+
 static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 		     size_t len, unsigned char_width, unsigned x, unsigned y,
 		     const struct tsm_screen_attr *a, tsm_age_t age,
@@ -513,6 +528,33 @@ static void redraw()
 	buffer->age = tsm_screen_draw(term.screen, draw_cell, buffer);
 	if (buffer->age == 0)
 		term.buf[0].age = term.buf[1].age = 0;
+
+    // clear the extra space at the edges to BG color
+    {
+        uint32_t bg = term.cfg.opacity << 24
+            | term.cfg.colors[TSM_COLOR_BACKGROUND][0] << 16
+            | term.cfg.colors[TSM_COLOR_BACKGROUND][1] << 8
+            | term.cfg.colors[TSM_COLOR_BACKGROUND][2];
+
+        if (term.width < term.confwidth) {
+            uint32_t *dst = buffer->data;
+            for (int x = term.width; x < term.confwidth; ++x) {
+                for (int y = 0; y < term.confheight; ++y) {
+                    dst[y*term.confwidth + x] = bg;
+                }
+            }
+        }
+
+        if (term.height < term.confheight) {
+            uint32_t *dst = buffer->data;
+            for (int x = 0; x < term.confwidth; ++x) {
+                for (int y = term.height; y < term.confheight; ++y) {
+                    dst[y*term.confwidth + x] = bg;
+                }
+            }
+        }
+    }
+
 	wl_surface_damage(term.surf, 0, 0, term.confwidth, term.confheight);
 
 	term.cb = wl_surface_frame(term.surf);
