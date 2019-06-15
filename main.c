@@ -111,6 +111,7 @@ static struct {
 	struct {
 		bool linger;
 		char *config;
+		char *display;
 	} opt;
 
 	struct {
@@ -1231,11 +1232,17 @@ static void usage(void)
 {
 	printf("usage: havoc [option...] [program [args...]]\n\n"
 	       "  -c <file>  Specify configuration file."
-                             " Use empty string for defaults.\n"
+			     " Use empty string for defaults.\n"
 	       "  -l         Keep window open after the child process exits.\n"
+	       "  -s <name>  Wayland display server to connect to.\n"
 	       "  -h         Show this help.\n");
 	exit(EXIT_SUCCESS);
 }
+
+#define take(s) (*(argv+1) \
+	? *++argv \
+	: (fprintf(stderr, "missing " s " after option '%s'\n", *argv), \
+	  exit(EXIT_FAILURE), NULL))
 
 int main(int argc, char *argv[])
 {
@@ -1247,10 +1254,13 @@ int main(int argc, char *argv[])
 retry:
 		switch (*++*argv) {
 		case 'c':
-			term.opt.config = *++argv;
+			term.opt.config = take("config file path");
 			break;
 		case 'l':
 			term.opt.linger = true;
+			break;
+		case 's':
+			term.opt.display = take("display name or socket");
 			break;
 		case 'h':
 			usage();
@@ -1260,6 +1270,7 @@ retry:
 		default:
 			fprintf(stderr, "unrecognized command line option "
 				"'%s'\n", *argv);
+			exit(EXIT_FAILURE);
 		}
 	}
 	read_config();
@@ -1273,7 +1284,7 @@ retry:
 	if (term.xkb_ctx == NULL)
 		goto exkb;
 
-	term.display = wl_display_connect(NULL);
+	term.display = wl_display_connect(term.opt.display);
 	if (term.display == NULL) {
 		fprintf(stderr, "could not connect to display\n");
 		goto econnect;
