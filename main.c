@@ -193,11 +193,13 @@ static void wcb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
 
 static void handle_display(int ev)
 {
-	if (ev & EPOLLIN) {
-		if (wl_display_dispatch(term.display) < 0)
-			term.die = true;
-	} else if (ev & EPOLLHUP) {
+	if (ev & EPOLLHUP) {
 		term.die = true;
+	} else if (ev & EPOLLIN) {
+		if (wl_display_dispatch(term.display) < 0) {
+			fprintf(stderr, "could not dispatch events: %m\n");
+			abort();
+		}
 	}
 }
 
@@ -286,7 +288,7 @@ static int utf8_to_utf32(char const **utf8, size_t *len, uint32_t *r)
 	return 0;
 }
 
-static void end_paste()
+static void end_paste(void)
 {
 	epoll_ctl(term.fd, EPOLL_CTL_DEL, term.paste.fd[0], NULL);
 	close(term.paste.fd[0]);
@@ -317,7 +319,8 @@ static void handle_paste(int ev)
 				memcpy(&term.paste.buf, p, term.paste.len);
 				break;
 			}
-			tsm_vte_handle_keyboard(term.vte, XKB_KEY_NoSymbol, 0, 0, code);
+			tsm_vte_handle_keyboard(term.vte, XKB_KEY_NoSymbol,
+						0, 0, code);
 		}
 	} else if (ev & EPOLLHUP) {
 		end_paste();
@@ -507,7 +510,7 @@ static const struct wl_callback_listener frame_listener = {
 	frame_callback
 };
 
-static void redraw()
+static void redraw(void)
 {
 	struct buffer *buffer = swap_buffers();
 
@@ -680,9 +683,12 @@ static struct wl_keyboard_listener kbd_listener = {
 	kbd_repeat
 };
 
-static void paste()
+static void paste(void)
 {
 	struct epoll_event ee;
+
+	if (!term.ps_dm)
+		return;
 
 	if (!term.paste.offer)
 		return;
@@ -693,7 +699,8 @@ static void paste()
 	if (pipe(term.paste.fd) < 0)
 		return;
 
-	gtk_primary_selection_offer_receive(term.paste.offer, "UTF8_STRING", term.paste.fd[1]);
+	gtk_primary_selection_offer_receive(term.paste.offer, "UTF8_STRING",
+					    term.paste.fd[1]);
 
 	ee.events = EPOLLIN;
 	ee.data.ptr = &pfp;
@@ -725,12 +732,38 @@ static struct gtk_primary_selection_source_listener pss_listener = {
 	pss_cancelled
 };
 
-static inline uint grid_x()
+static void copy(uint32_t serial)
+{
+	if (!term.ps_dm)
+		return;
+
+	term.copy.source =
+		gtk_primary_selection_device_manager_create_source(term.ps_dm);
+	gtk_primary_selection_source_offer(term.copy.source, "UTF8_STRING");
+	gtk_primary_selection_source_add_listener(term.copy.source,
+						  &pss_listener, NULL);
+	gtk_primary_selection_device_set_selection(term.ps_d, term.copy.source,
+						   serial);
+	tsm_screen_selection_copy(term.screen, &term.copy.data);
+}
+
+static void uncopy(void)
+{
+	if (!term.ps_dm)
+		return;
+
+	if (!term.copy.source)
+		return;
+
+	pss_cancelled(NULL, term.copy.source);
+}
+
+static inline uint grid_x(void)
 {
 	return wl_fixed_to_double(term.ptr_x) / term.cwidth;
 }
 
-static inline uint grid_y()
+static inline uint grid_y(void)
 {
 	return wl_fixed_to_double(term.ptr_y) / term.cheight;
 }
@@ -751,20 +784,12 @@ static void ptr_leave(void *data, struct wl_pointer *wl_pointer,
 static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
 		       uint32_t time, wl_fixed_t x, wl_fixed_t y)
 {
-	if (!term.ps_dm)
-		return;
-
 	term.ptr_x = x;
 	term.ptr_y = y;
+
 	switch (term.select) {
 	case 1:
-		if (term.copy.source) {
-			gtk_primary_selection_source_destroy(term.copy.source);
-			gtk_primary_selection_device_set_selection(term.ps_d, NULL, 0);
-			free(term.copy.data);
-			term.copy.source = NULL;
-		}
-
+		uncopy();
 		term.select = 2;
 		tsm_screen_selection_start(term.screen, grid_x(), grid_y());
 		term.need_redraw = true;
@@ -779,31 +804,25 @@ static void ptr_button(void *data, struct wl_pointer *wl_pointer,
 		       uint32_t serial, uint32_t time, uint32_t button,
 		       uint32_t state)
 {
-	if (!term.ps_dm)
-		return;
-
 	if (button == 0x110) {
 		switch (state) {
 		case WL_POINTER_BUTTON_STATE_PRESSED:
 			if (term.select == 3) {
 				tsm_screen_selection_reset(term.screen);
+				term.need_redraw = true;
 			}
 			term.select = 1;
 			break;
 		case WL_POINTER_BUTTON_STATE_RELEASED:
 			if (term.select == 2) {
-				term.copy.source = gtk_primary_selection_device_manager_create_source(term.ps_dm);
-				gtk_primary_selection_source_offer(term.copy.source, "UTF8_STRING");
-				gtk_primary_selection_source_add_listener(term.copy.source, &pss_listener, NULL);
-				gtk_primary_selection_device_set_selection(term.ps_d, term.copy.source, serial);
-				tsm_screen_selection_copy(term.screen, &term.copy.data);
+				copy(serial);
 				term.select = 3;
 			} else {
 				term.select = 0;
 			}
 		}
-		term.need_redraw = true;
-	} else if (button == 0x112 && state == WL_POINTER_BUTTON_STATE_RELEASED) {
+	} else if (button == 0x112 &&
+		   state == WL_POINTER_BUTTON_STATE_RELEASED) {
 		paste();
 	}
 }
@@ -1109,6 +1128,9 @@ static FILE *open_config(void)
 	FILE *f;
 
 	if (term.opt.config) {
+		if (*term.opt.config == '\0')
+			return NULL;
+
 		f = fopen(term.opt.config, "r");
 		if (f == NULL)
 			fprintf(stderr, "could not open '%s': %m, "
@@ -1208,9 +1230,10 @@ static void read_config(void)
 static void usage(void)
 {
 	printf("usage: havoc [option...] [program [args...]]\n\n"
-	       "  -c <file>   Specify configuration file.\n"
-	       "  -l          Keep window open after the child process exits.\n"
-	       "  -h          Show this help.\n");
+	       "  -c <file>  Specify configuration file."
+                             " Use empty string for defaults.\n"
+	       "  -l         Keep window open after the child process exits.\n"
+	       "  -h         Show this help.\n");
 	exit(EXIT_SUCCESS);
 }
 
@@ -1235,7 +1258,8 @@ retry:
 		case '-':
 			goto retry;
 		default:
-			fprintf(stderr, "unrecognized command line option '%s'\n", *argv);
+			fprintf(stderr, "unrecognized command line option "
+				"'%s'\n", *argv);
 		}
 	}
 	read_config();
@@ -1300,7 +1324,8 @@ retry:
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
 
-	term.repeat.fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+	term.repeat.fd = timerfd_create(CLOCK_MONOTONIC,
+					TFD_NONBLOCK | TFD_CLOEXEC);
 	if (term.repeat.fd < 0) {
 		fprintf(stderr, "could not create key repeat timer: %m");
 		goto etimer;
@@ -1309,7 +1334,8 @@ retry:
 	if (term.ps_dm && term.seat) {
 		term.ps_d = gtk_primary_selection_device_manager_get_device(
 			term.ps_dm, term.seat);
-		gtk_primary_selection_device_add_listener(term.ps_d, &psd_listener, NULL);
+		gtk_primary_selection_device_add_listener(term.ps_d,
+							  &psd_listener, NULL);
 	}
 
 	display_fd = wl_display_get_fd(term.display);

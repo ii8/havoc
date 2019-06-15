@@ -1479,13 +1479,13 @@ static void open_font(char *path)
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
 		fprintf(stderr, "could not open font file: %m\n");
-		goto fb;
+		goto err;
 	}
 
 	if (fstat(fd, &st) < 0) {
 		fprintf(stderr, "could not fstat font file: %m\n");
 		close(fd);
-		goto fb;
+		goto err;
 	}
 
 	font.size = st.st_size;
@@ -1493,11 +1493,13 @@ static void open_font(char *path)
 	close(fd);
 	if (font.data == MAP_FAILED) {
 		fprintf(stderr, "could not mmap font file: %m\n");
-		goto fb;
+		goto err;
 	}
 	font.mmapped = true;
 	return;
 
+err:
+	fprintf(stderr, "using fallback font\n");
 fb:
 	font.size = sizeof(fallback);
 	font.data = &fallback[0];
