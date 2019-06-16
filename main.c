@@ -421,43 +421,54 @@ static struct buffer *swap_buffers(void)
 	return buf;
 }
 
-static void blank(uint32_t *dst, uint w, uint32_t bg)
+#define mul(a, b) (((a) * (b) + 255) >> 8)
+#define join(a, r, g, b) ((a) << 24 | (r) << 16 | (g) << 8 | (b))
+
+typedef uint_fast8_t uf8;
+
+static void blank(uint32_t *dst, uint w,
+		  uf8 br, uf8 bg, uf8 bb, uf8 ba)
 {
 	uint i;
+	uint32_t b;
 	int h = term.cheight;
 
+	b = join(ba, mul(br, ba), mul(bg, ba), mul(bb, ba));
 	w *= term.cwidth;
 
 	while (h--) {
 		for (i = 0; i < w; ++i)
-			dst[i] = bg;
+			dst[i] = b;
 		dst += term.width;
 	}
 }
 
-static void print(uint32_t *dst, uint w, uint32_t bg, uint32_t fg, uchr *glyph)
+static void print(uint32_t *dst, uint w,
+		  uf8 br, uf8 bg, uf8 bb,
+		  uf8 fr, uf8 fg, uf8 fb,
+		  uf8 ba, uchr *glyph)
 {
 	uint i;
 	int h = term.cheight;
 
 	w *= term.cwidth;
 
+	br = mul(br, ba);
+	bg = mul(bg, ba);
+	bb = mul(bb, ba);
 	while (h--) {
 		for (i = 0; i < w; ++i) {
-			if (glyph[i] == 0) {
-				dst[i] = bg;
-			} else if (glyph[i] == 0xff) {
-				dst[i] = fg;
+			uf8 fa = glyph[i];
+			if (fa == 0) {
+				dst[i] = join(ba, br, bg, bb);
+			} else if (fa == 0xff) {
+				dst[i] = join(0xff, fr, fg, fb);
 			} else {
-				uint_fast32_t a, ba = bg >> 24, fa = glyph[i];
-				uint_fast32_t rb = bg & 0x00ff00ff;
-				uint_fast32_t g = bg & 0x0000ff00;
-
-				a = ((ba << 8) + (fa << 8) - fa * ba) >> 8;
-				rb += ((fg & 0x00ff00ff) - rb) * fa >> 8;
-				g += ((fg & 0x0000ff00) - g) * fa >> 8;
-
-				dst[i] = a << 24 | rb & 0xff00ff | g & 0xff00;
+				uf8 ca = 255 - fa;
+				dst[i] = join(fa + mul(ba, ca),
+					mul(fr, fa) + mul(br, ca),
+					mul(fg, fa) + mul(bg, ca),
+					mul(fb, fa) + mul(bb, ca));
 			}
 		}
 
@@ -472,28 +483,34 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 		     void *data)
 {
 	struct buffer *buffer = data;
-	uint32_t bg, fg, *dst = buffer->data;
+	uint32_t *dst = buffer->data;
 
 	if (age && age <= buffer->age)
 		return 0;
 
 	dst = &dst[y * term.cheight * term.width + x * term.cwidth];
 
-	if (a->inverse) {
-		bg = term.cfg.opacity << 24 | a->fr << 16 | a->fg << 8 | a->fb;
-		fg = 0xff000000 | a->br << 16 | a->bg << 8 | a->bb;
-	} else {
-		bg = term.cfg.opacity << 24 | a->br << 16 | a->bg << 8 | a->bb;
-		fg = 0xff000000 | a->fr << 16 | a->fg << 8 | a->fb;
-	}
-
 	if (len == 0) {
-		blank(dst, char_width, bg);
+		if (a->inverse)
+			blank(dst, char_width,
+			      ~a->br, ~a->bg, ~a->bb, term.cfg.opacity);
+		else
+			blank(dst, char_width,
+			      a->br, a->bg, a->bb, term.cfg.opacity);
 	} else {
 		assert(len == 1);
 		uchr *g = get_glyph(id, ch[0], char_width);
 
-		print(dst, char_width, bg, fg, g);
+		if (a->inverse)
+			print(dst, char_width,
+			      ~a->br, ~a->bg, ~a->bb,
+			      ~a->fr, ~a->fg, ~a->fb,
+			      term.cfg.opacity, g);
+		else
+			print(dst, char_width,
+			      a->br, a->bg, a->bb,
+			      a->fr, a->fg, a->fb,
+			      term.cfg.opacity, g);
 	}
 
 	return 0;
