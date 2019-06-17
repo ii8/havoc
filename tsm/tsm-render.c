@@ -162,7 +162,9 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 			}
 
 			ch = tsm_symbol_get(con->sym_table, &cell->ch, &len);
-			if (cell->ch == ' ' || cell->ch == 0)
+			if (cell->ch == 0 ||
+			    cell->ch == ' ' ||
+			    cell->ch == 0xA0)
 				len = 0;
 			ret = draw_cb(con, cell->ch, ch, len, cell->width,
 				      j, i, &attr, age, data);
