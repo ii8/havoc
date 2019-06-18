@@ -8,7 +8,7 @@ You will need the libwayland-client and libxkbcommon development files
 as well as wayland-protocols and the wayland-scanner(comes with the
 `wayland-devel` package on many distros.)
 
-Then run make;
+Then run make:
 ```
 make CFLAGS="-O2 -DNDEBUG"
 make install

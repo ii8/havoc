@@ -61,8 +61,11 @@ static struct {
 
 	int col, row;
 	int cwidth, cheight;
-	int width, height;
-	int confheight, confwidth;
+	size_t width, height;
+	size_t confheight, confwidth;
+	struct {
+		size_t top, left;
+	} margin;
 
 	struct tsm_screen *screen;
 	struct tsm_vte *vte;
@@ -117,6 +120,7 @@ static struct {
 	struct {
 		char shell[32];
 		int col, row;
+		bool margin;
 		uchr opacity;
 		int font_size;
 		char font_path[512];
@@ -126,6 +130,7 @@ static struct {
 	.cfg.shell = "/bin/sh",
 	.cfg.col = 80,
 	.cfg.row = 24,
+	.cfg.margin = true,
 	.cfg.opacity = 0xff,
 	.cfg.font_size = 18,
 	.cfg.font_path = "",
@@ -488,6 +493,7 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 	if (age && age <= buffer->age)
 		return 0;
 
+	dst += term.margin.top * term.width + term.margin.left;
 	dst = &dst[y * term.cheight * term.width + x * term.cwidth];
 
 	if (len == 0) {
@@ -498,7 +504,7 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 			blank(dst, char_width,
 			      a->br, a->bg, a->bb, term.cfg.opacity);
 	} else {
-		assert(len == 1);
+		/* todo, combining marks */
 		uchr *g = get_glyph(id, ch[0], char_width);
 
 		if (a->inverse)
@@ -514,6 +520,33 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 	}
 
 	return 0;
+}
+
+static void draw_margin(struct buffer *buffer)
+{
+	uint32_t *dst = buffer->data;
+	uint8_t a = term.cfg.opacity;
+	uint8_t *rgb = term.cfg.colors[TSM_COLOR_BACKGROUND];
+	uint32_t c = join(a, mul(rgb[0], a), mul(rgb[1], a), mul(rgb[2], a));
+	size_t inw = term.col * term.cwidth;
+	size_t inh = term.row * term.cheight;
+	size_t i, j;
+
+	for (i = 0; i < term.width * term.margin.top; ++i)
+		dst[i] = c;
+
+	for (i = (term.margin.top + inh) * term.width;
+	     i < term.height * term.width;
+	     ++i)
+		dst[i] = c;
+
+	for (i = term.margin.top; i < term.margin.top + inh; ++i) {
+		for (j = 0; j < term.margin.left; ++j)
+			dst[i * term.width + j] = c;
+
+		for (j = term.margin.left + inw; j < term.width; ++j)
+			dst[i * term.width + j] = c;
+	}
 }
 
 static void frame_callback(void *data, struct wl_callback *cb, uint32_t time)
@@ -545,8 +578,12 @@ static void redraw(void)
 	buffer->busy = true;
 	term.can_redraw = false;
 	term.need_redraw = false;
-	if (term.resize)
+	if (term.resize) {
 		--term.resize;
+
+		if (term.cfg.margin)
+			draw_margin(buffer);
+	}
 }
 
 static void reset_repeat(void)
@@ -984,16 +1021,33 @@ static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
 	assert(!term.configured);
 	term.configured = true;
 
-	if (col == 0 || row == 0 || (term.col == col && term.row == row))
+	if (col == 0 || row == 0)
 		return;
 
+	if (term.width == term.confwidth && term.height == term.confheight)
+		return;
+
+	if (term.cfg.margin) {
+		term.width = term.confwidth;
+		term.height = term.confheight;
+		term.margin.left = (term.width - col * term.cwidth) / 2;
+		term.margin.top = (term.height - row * term.cheight) / 2;
+		term.need_redraw = true;
+		term.resize = 2;
+	} else {
+		term.width = col * term.cwidth;
+		term.height = row * term.cheight;
+	}
+
+	if (term.col == col && term.row == row)
+		return;
+
+	term.col = col;
+	term.row = row;
 	tsm_screen_resize(term.screen, col, row);
 	if (term.master_fd >= 0 && ioctl(term.master_fd, TIOCSWINSZ, &ws) < 0)
 		fprintf(stderr, "could not resize pty: %m\n");
-	term.col = col;
-	term.row = row;
-	term.width = col * term.cwidth;
-	term.height = row * term.cheight;
+
 	term.need_redraw = true;
 	term.resize = 2;
 }
