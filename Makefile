@@ -17,7 +17,7 @@ havoc: tsm $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDFLAGS)
 
 install: havoc
-	install havoc $(BINDIR)
+	install -D -t $(DESTDIR)$(BINDIR) havoc
 
 clean:
 	$(MAKE) -C tsm clean
