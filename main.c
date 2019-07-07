@@ -1,4 +1,3 @@
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,7 +14,7 @@
 #include <unistd.h>
 #include <pty.h>
 
-#include <xkbcommon/xkbcommon.h>
+#include <xkbcommon/xkbcommon-compose.h>
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
 
@@ -74,6 +73,8 @@ static struct {
 	struct xkb_context *xkb_ctx;
 	struct xkb_state *xkb_state;
 	struct xkb_keymap *xkb_keymap;
+	struct xkb_compose_table *xkb_compose_table;
+	struct xkb_compose_state *xkb_compose_state;
 	xkb_mod_index_t xkb_alt;
 	xkb_mod_index_t xkb_ctrl;
 	xkb_mod_index_t xkb_shift;
@@ -84,6 +85,7 @@ static struct {
 
 	struct {
 		int fd;
+		uint32_t key;
 		xkb_keysym_t sym;
 		uint32_t unicode;
 		struct itimerspec its;
@@ -602,6 +604,8 @@ static void kbd_keymap(void *data, struct wl_keyboard *k, uint32_t fmt,
 {
 	struct xkb_keymap *keymap;
 	struct xkb_state *state;
+	struct xkb_compose_table *compose_table;
+	struct xkb_compose_state *compose_state;
 	char *map;
 
 	if (fmt != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
@@ -633,6 +637,31 @@ static void kbd_keymap(void *data, struct wl_keyboard *k, uint32_t fmt,
 		return;
 	}
 
+	/* Set up XKB compose table */
+	compose_table =
+		xkb_compose_table_new_from_locale(term.xkb_ctx,
+						  getenv("LANG"),
+						  XKB_COMPOSE_COMPILE_NO_FLAGS);
+	if (compose_table) {
+		/* Set up XKB compose state */
+		compose_state = xkb_compose_state_new(compose_table,
+					      XKB_COMPOSE_STATE_NO_FLAGS);
+		if (compose_state) {
+			xkb_compose_state_unref(term.xkb_compose_state);
+			xkb_compose_table_unref(term.xkb_compose_table);
+			term.xkb_compose_state = compose_state;
+			term.xkb_compose_table = compose_table;
+		} else {
+			fprintf(stderr, "could not create XKB compose state. "
+				"Disabling compose.\n");
+			xkb_compose_table_unref(compose_table);
+			compose_table = NULL;
+		}
+	} else {
+		fprintf(stderr, "could not create XKB compose table for locale '%s'.\n",
+			getenv("LANG"));
+	}
+
 	xkb_keymap_unref(term.xkb_keymap);
 	xkb_state_unref(term.xkb_state);
 	term.xkb_keymap = keymap;
@@ -654,13 +683,42 @@ static void kbd_leave(void *data, struct wl_keyboard *k, uint32_t serial,
 	reset_repeat();
 }
 
+static xkb_keysym_t process_key(xkb_keysym_t sym)
+{
+	if (!term.xkb_compose_state)
+		return sym;
+	if (sym == XKB_KEY_NoSymbol)
+		return sym;
+	if (xkb_compose_state_feed(term.xkb_compose_state,
+				   sym) != XKB_COMPOSE_FEED_ACCEPTED)
+		return sym;
+
+	switch (xkb_compose_state_get_status(term.xkb_compose_state)) {
+	case XKB_COMPOSE_COMPOSING:
+		return XKB_KEY_NoSymbol;
+	case XKB_COMPOSE_COMPOSED:
+		return xkb_compose_state_get_one_sym(term.xkb_compose_state);
+	case XKB_COMPOSE_CANCELLED:
+		return XKB_KEY_NoSymbol;
+	case XKB_COMPOSE_NOTHING:
+	default:
+		return sym;
+	}
+}
+
 static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		    uint32_t time, uint32_t key, uint32_t state)
 {
 	xkb_keysym_t sym;
 	uint32_t unicode;
 
-	sym = xkb_state_key_get_one_sym(term.xkb_state, key + 8);
+	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+		if (term.repeat.key == key)
+			reset_repeat();
+		return;
+	}
+
+	sym = process_key(xkb_state_key_get_one_sym(term.xkb_state, key + 8));
 
 	switch (sym) {
 	case XKB_KEY_Shift_L:
@@ -678,12 +736,9 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		return;
 	}
 
-	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
-		if (sym == term.repeat.sym)
-			reset_repeat();
-	} else if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		unicode = xkb_keysym_to_utf32(sym);
-
+		term.repeat.key = key;
 		term.repeat.sym = sym;
 		term.repeat.unicode = unicode;
 		timerfd_settime(term.repeat.fd, 0, &term.repeat.its, NULL);
