@@ -766,7 +766,7 @@ static void kbd_mods(void *data, struct wl_keyboard *k, uint32_t serial,
 		return;
 
 	xkb_state_update_mask(term.xkb_state, depressed, latched, locked,
-			      group, 0, 0);
+			      0, 0, group);
 
 	m = xkb_state_serialize_mods(term.xkb_state, XKB_STATE_MODS_EFFECTIVE);
 
