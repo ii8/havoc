@@ -120,6 +120,7 @@ static struct {
 	struct {
 		char shell[32];
 		int col, row;
+		uint scrollback;
 		bool margin;
 		uchr opacity;
 		int font_size;
@@ -130,7 +131,8 @@ static struct {
 	.cfg.shell = "/bin/sh",
 	.cfg.col = 80,
 	.cfg.row = 24,
-	.cfg.margin = true,
+	.cfg.scrollback = 0,
+	.cfg.margin = false,
 	.cfg.opacity = 0xff,
 	.cfg.font_size = 18,
 	.cfg.font_path = "",
@@ -1119,7 +1121,7 @@ void setup_pty(char *argv[])
 			execvp(*argv, argv);
 			prog = *argv;
 		} else {
-			execl(term.cfg.shell, term.cfg.shell, NULL);
+			execlp(term.cfg.shell, term.cfg.shell, NULL);
 			prog = term.cfg.shell;
 		}
 		fprintf(stderr, "could not execute %s: %m", prog);
@@ -1137,16 +1139,28 @@ static int clip(int a, int b, int c)
 	return a < b ? b : a > c ? c : a;
 }
 
-static void general_config(char *key, char *val)
+static void child_config(char *key, char *val)
 {
-	if (strcmp(key, "shell") == 0)
+	if (strcmp(key, "program") == 0)
 		strncpy(term.cfg.shell, val, sizeof(term.cfg.shell) - 1);
-	else if (strcmp(key, "opacity") == 0)
+}
+
+static void window_config(char *key, char *val)
+{
+	if (strcmp(key, "opacity") == 0)
 		term.cfg.opacity = clip(atoi(val), 0, 255);
-	else if (strcmp(key, "rows") == 0)
+	else if (strcmp(key, "margin") == 0)
+		term.cfg.margin = strcmp(val, "yes") == 0;
+}
+
+static void terminal_config(char *key, char *val)
+{
+	if (strcmp(key, "rows") == 0)
 		term.cfg.row = clip(atoi(val), 1, 300);
 	else if (strcmp(key, "columns") == 0)
 		term.cfg.col = clip(atoi(val), 1, 600);
+	else if (strcmp(key, "scrollback") == 0)
+		term.cfg.scrollback = strtoul(val, NULL, 10);
 }
 
 static void font_config(char *key, char *val)
@@ -1190,7 +1204,7 @@ static void color_config(char *key, char *val)
 	return;
 
 invalid:
-	fprintf(stderr, "invalid color for %s", key);
+	fprintf(stderr, "invalid color for %s\n", key);
 }
 
 static FILE *open_config(void)
@@ -1235,7 +1249,7 @@ static void read_config(void)
 {
 	FILE *f = open_config();
 	char *key, *val, *p, line[512];
-	void (*section)(char *, char *) = &general_config;
+	void (*section)(char *, char *) = NULL;
 	int i = 0;
 
 	if (f == NULL)
@@ -1254,14 +1268,18 @@ static void read_config(void)
 		case '[':
 			p = strchr(key, ']');
 			if (p == NULL) {
-				fprintf(stderr, "bad line in config at %d", i);
+				fprintf(stderr, "error on config line %d\n", i);
 				continue;
 			}
 			*p = '\0';
 			++key;
 
-			if (strcmp(key, "general") == 0)
-				section = &general_config;
+			if (strcmp(key, "child") == 0)
+				section = &child_config;
+			else if (strcmp(key, "window") == 0)
+				section = &window_config;
+			else if (strcmp(key, "terminal") == 0)
+				section = &terminal_config;
 			else if (strcmp(key, "font") == 0)
 				section = &font_config;
 			else if (strcmp(key, "colors") == 0)
@@ -1271,7 +1289,7 @@ static void read_config(void)
 		default:
 			val = strchr(key, '=');
 			if (val == NULL) {
-				fprintf(stderr, "bad line in config at %d", i);
+				fprintf(stderr, "error on config line %d\n", i);
 				continue;
 			}
 
@@ -1292,7 +1310,8 @@ static void read_config(void)
 				--p;
 			}
 
-			section(key, val);
+			if (section)
+				section(key, val);
 		}
 	}
 
@@ -1385,7 +1404,7 @@ retry:
 		fprintf(stderr, "failed to initialize tsm\n");
 		goto etsm;
 	}
-	tsm_screen_set_max_sb(term.screen, 600);
+	tsm_screen_set_max_sb(term.screen, term.cfg.scrollback);
 
 	if (tsm_vte_new(&term.vte, term.screen, wcb, NULL, log_tsm, NULL) < 0)
 		goto evte;
@@ -1409,7 +1428,7 @@ retry:
 	term.repeat.fd = timerfd_create(CLOCK_MONOTONIC,
 					TFD_NONBLOCK | TFD_CLOEXEC);
 	if (term.repeat.fd < 0) {
-		fprintf(stderr, "could not create key repeat timer: %m");
+		fprintf(stderr, "could not create key repeat timer: %m\n");
 		goto etimer;
 	}
 
