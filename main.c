@@ -747,7 +747,7 @@ static void paste(void)
 	if (!term.ps_dm)
 		return;
 
-	if (!term.paste.offer)
+	if (!term.paste.acceptable)
 		return;
 
 	if (term.paste.active)
@@ -779,9 +779,8 @@ static void pss_cancelled(void *data,
 			  struct gtk_primary_selection_source *source)
 {
 	gtk_primary_selection_source_destroy(term.copy.source);
-	gtk_primary_selection_device_set_selection(term.ps_d, NULL, 0);
-	free(term.copy.data);
 	term.copy.source = NULL;
+	free(term.copy.data);
 }
 
 static struct gtk_primary_selection_source_listener pss_listener = {
@@ -975,6 +974,9 @@ static void psd_data_offer(void *data,
 			   struct gtk_primary_selection_device *ps_d,
 			   struct gtk_primary_selection_offer *offer)
 {
+	if (term.paste.offer)
+		gtk_primary_selection_offer_destroy(term.paste.offer);
+	term.paste.offer = offer;
 	term.paste.acceptable = false;
 	gtk_primary_selection_offer_add_listener(offer, &pso_listener, NULL);
 }
@@ -983,8 +985,11 @@ static void psd_selection(void *data,
 			  struct gtk_primary_selection_device *ps_d,
 			  struct gtk_primary_selection_offer *id)
 {
-	if (term.paste.acceptable)
-		term.paste.offer = id;
+	if (id == NULL && term.paste.offer) {
+		gtk_primary_selection_offer_destroy(term.paste.offer);
+		term.paste.offer = NULL;
+		term.paste.acceptable = false;
+	}
 }
 
 static struct gtk_primary_selection_device_listener psd_listener = {
