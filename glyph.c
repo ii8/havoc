@@ -965,6 +965,11 @@ static void rasterize_sorted_edges(struct bitmap *result, struct edge *e,
 								   off_x,
 								   scan_y_top);
 				if (z != NULL) {
+					if (j == 0 && off_y != 0) {
+						if (z->ey < scan_y_top) {
+							z->ey = scan_y_top;
+						}
+					}
 					assert(z->ey >= scan_y_top);
 					/* insert at front */
 					z->next = active;
@@ -1534,9 +1539,9 @@ int font_init(int size, char *path, int *w, int *h)
 	font.height = font.ascent - descent + linegap;
 	font.width = get_width(&font);
 
-	font.ascent *= font.scale;
-	font.width *= font.scale;
-	font.height *= font.scale;
+	font.ascent = floor(font.scale * font.ascent);
+	font.width = ceil(font.scale * font.width);
+	font.height = ceil(font.scale * font.height);
 
 	*w = font.width;
 	*h = font.height;

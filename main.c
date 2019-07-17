@@ -1372,8 +1372,10 @@ retry:
 	setup_pty(argv);
 
 	if (font_init(term.cfg.font_size, term.cfg.font_path,
-		      &term.cwidth, &term.cheight) < 0)
+		      &term.cwidth, &term.cheight) < 0) {
+		fprintf(stderr, "could not load font\n");
 		goto efont;
+	}
 
 	term.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 	if (term.xkb_ctx == NULL)
