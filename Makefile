@@ -7,14 +7,14 @@ PREFIX=/usr/local
 BINDIR=$(PREFIX)/bin
 
 CFLAGS=-Wall -Wextra -Wno-unused-parameter -Wno-parentheses
-LDFLAGS=-lrt -lm -lutil -lwayland-client -lxkbcommon -Ltsm -lhtsm
 
 VPATH=$(PROTDIR)/stable/xdg-shell
+LIBS=-lrt -lm -lutil -lwayland-client -lxkbcommon -Ltsm -lhtsm
 OBJ=xdg-shell.o gtk-primary-selection.o glyph.o main.o
 GEN=xdg-shell.c xdg-shell.h gtk-primary-selection.c gtk-primary-selection.h
 
 havoc: tsm $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDFLAGS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
 
 install: havoc
 	install -D -t $(DESTDIR)$(BINDIR) havoc
