@@ -652,14 +652,14 @@ static void kbd_keymap(void *data, struct wl_keyboard *k, uint32_t fmt,
 			term.xkb_compose_state = compose_state;
 			term.xkb_compose_table = compose_table;
 		} else {
-			fprintf(stderr, "could not create XKB compose state.  "
-				"Disabiling compose.\n");
+			fprintf(stderr, "could not create XKB compose state. "
+				"Disabling compose.\n");
 			xkb_compose_table_unref(compose_table);
 			compose_table = NULL;
 		}
 	} else {
-		fprintf(stderr, "could not create XKB compose table for locale '%s'.  "
-			"Disabiling compose\n", getenv("LANG"));
+		fprintf(stderr, "could not create XKB compose table for locale '%s'.\n",
+			getenv("LANG"));
 	}
 
 	xkb_keymap_unref(term.xkb_keymap);
