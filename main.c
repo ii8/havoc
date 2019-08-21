@@ -85,6 +85,7 @@ static struct {
 
 	struct {
 		int fd;
+		uint32_t key;
 		xkb_keysym_t sym;
 		uint32_t unicode;
 		struct itimerspec its;
@@ -698,7 +699,6 @@ static xkb_keysym_t process_key(xkb_keysym_t sym)
 	case XKB_COMPOSE_CANCELLED:
 		return XKB_KEY_NoSymbol;
 	case XKB_COMPOSE_NOTHING:
-		return sym;
 	default:
 		return sym;
 	}
@@ -713,10 +713,11 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 	uint32_t unicode;
 
 	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
-		reset_repeat();
+		if (term.repeat.key == key)
+			reset_repeat();
 		return;
 	}
-	
+
 	num_syms = xkb_state_key_get_syms(term.xkb_state, key + 8, &syms); 
 
 	sym = XKB_KEY_NoSymbol;
@@ -745,6 +746,7 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		unicode = xkb_keysym_to_utf32(sym);
 
 		if (xkb_compose_state_get_status(term.xkb_compose_state) != XKB_COMPOSE_COMPOSING) {
+			term.repeat.key = key;
 			term.repeat.sym = sym;
 			term.repeat.unicode = unicode;
 			timerfd_settime(term.repeat.fd, 0, &term.repeat.its, NULL);
