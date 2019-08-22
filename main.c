@@ -710,8 +710,6 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		    uint32_t time, uint32_t key, uint32_t state)
 {
 	xkb_keysym_t sym;
-	const xkb_keysym_t *syms;
-	uint32_t num_syms;
 	uint32_t unicode;
 
 	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
@@ -720,13 +718,7 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		return;
 	}
 
-	num_syms = xkb_state_key_get_syms(term.xkb_state, key + 8, &syms); 
-
-	sym = XKB_KEY_NoSymbol;
-	if (num_syms == 1)
-		sym = syms[0];
-
-	sym = process_key(sym);
+	sym = process_key(xkb_state_key_get_one_sym(term.xkb_state, key + 8));
 
 	switch (sym) {
 	case XKB_KEY_Shift_L:
@@ -746,14 +738,10 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 
 	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		unicode = xkb_keysym_to_utf32(sym);
-
-		if (xkb_compose_state_get_status(term.xkb_compose_state) != XKB_COMPOSE_COMPOSING) {
-			term.repeat.key = key;
-			term.repeat.sym = sym;
-			term.repeat.unicode = unicode;
-			timerfd_settime(term.repeat.fd, 0, &term.repeat.its, NULL);
-		}
-
+		term.repeat.key = key;
+		term.repeat.sym = sym;
+		term.repeat.unicode = unicode;
+		timerfd_settime(term.repeat.fd, 0, &term.repeat.its, NULL);
 		tsm_vte_handle_keyboard(term.vte, sym, 0, term.mods, unicode);
 	}
 }
