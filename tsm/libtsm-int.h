@@ -104,8 +104,6 @@ struct selection_pos {
 
 struct tsm_screen {
 	size_t ref;
-	llog_submit_t llog;
-	void *llog_data;
 	unsigned int opts;
 	unsigned int flags;
 	struct tsm_symbol_table *sym_table;

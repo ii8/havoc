@@ -460,7 +460,7 @@ static inline unsigned int to_abs_y(struct tsm_screen *con, unsigned int y)
 }
 
 SHL_EXPORT
-int tsm_screen_new(struct tsm_screen **out, tsm_log_t log, void *log_data)
+int tsm_screen_new(struct tsm_screen **out)
 {
 	struct tsm_screen *con;
 	int ret;
@@ -475,8 +475,6 @@ int tsm_screen_new(struct tsm_screen **out, tsm_log_t log, void *log_data)
 
 	memset(con, 0, sizeof(*con));
 	con->ref = 1;
-	con->llog = log;
-	con->llog_data = log_data;
 	con->age_cnt = 1;
 	con->age = con->age_cnt;
 	con->def_attr.fr = 255;
@@ -491,7 +489,6 @@ int tsm_screen_new(struct tsm_screen **out, tsm_log_t log, void *log_data)
 	if (ret)
 		goto err_free;
 
-	llog_debug(con, "new screen");
 	*out = con;
 
 	return 0;
@@ -525,8 +522,6 @@ void tsm_screen_unref(struct tsm_screen *con)
 
 	if (!con || !con->ref || --con->ref)
 		return;
-
-	llog_debug(con, "destroying screen");
 
 	for (i = 0; i < con->line_num; ++i) {
 		line_free(con->main_lines[i]);

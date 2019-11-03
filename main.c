@@ -22,12 +22,9 @@
 #include "xdg-shell.h"
 #include "gtk-primary-selection.h"
 
-typedef unsigned int uint;
-typedef unsigned char uchr;
-
-unsigned char *get_glyph(uint32_t, uint32_t, uint);
 int font_init(int, char *, int *, int *);
 void font_deinit(void);
+unsigned char *get_glyph(uint32_t, uint32_t, unsigned);
 
 static struct {
 	bool die;
@@ -42,6 +39,7 @@ static struct {
 	struct wl_registry *registry;
 	struct wl_compositor *cp;
 	struct wl_shm *shm;
+	bool shm_argb;
 	struct xdg_wm_base *wm_base;
 	struct wl_seat *seat;
 
@@ -52,7 +50,7 @@ static struct {
 	struct buffer {
 		struct wl_buffer *b;
 		void *data;
-		int size;
+		size_t size;
 		bool busy;
 		tsm_age_t age;
 	} buf[2];
@@ -81,6 +79,7 @@ static struct {
 
 	struct wl_keyboard *kbd;
 	struct wl_pointer *ptr;
+	wl_fixed_t ptr_x, ptr_y;
 	int select;
 
 	struct {
@@ -90,10 +89,6 @@ static struct {
 		uint32_t unicode;
 		struct itimerspec its;
 	} repeat;
-
-	wl_fixed_t ptr_x, ptr_y;
-
-	bool has_argb;
 
 	struct gtk_primary_selection_device_manager *ps_dm;
 	struct gtk_primary_selection_device *ps_d;
@@ -122,9 +117,9 @@ static struct {
 	struct {
 		char shell[32];
 		int col, row;
-		uint scrollback;
+		unsigned scrollback;
 		bool margin;
-		uchr opacity;
+		unsigned char opacity;
 		int font_size;
 		char font_path[512];
 		uint8_t colors[TSM_COLOR_NUM][3];
@@ -159,39 +154,6 @@ static struct {
 		[TSM_COLOR_BACKGROUND]    = {   0,   0,   0 },
 	}
 };
-
-static const char *sev2str_table[] = {
-	"FATAL",
-	"ALERT",
-	"CRITICAL",
-	"ERROR",
-	"WARNING",
-	"NOTICE",
-	"INFO",
-	"DEBUG"
-};
-
-static const char *sev2str(uint sev)
-{
-	if (sev > 7)
-		return "UNKNOWN";
-
-	return sev2str_table[sev];
-}
-
-static void log_tsm(void *data,
-		    const char *file,
-		    int line,
-		    const char *fn,
-		    const char *subs,
-		    uint sev,
-		    const char *format,
-		    va_list args)
-{
-	fprintf(stderr, "%s: %s: ", sev2str(sev), subs);
-	vfprintf(stderr, format, args);
-	fprintf(stderr, "\n");
-}
 
 static void wcb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
 {
@@ -344,18 +306,18 @@ static struct epcb {
 , rfp = { handle_repeat }
 , pfp = { handle_paste };
 
-static void buf_release(void *data, struct wl_buffer *b)
+static void buffer_release(void *data, struct wl_buffer *b)
 {
 	struct buffer *buffer = data;
 
 	buffer->busy = false;
 }
 
-static const struct wl_buffer_listener buf_listener = {
-	buf_release
+static const struct wl_buffer_listener buffer_listener = {
+	buffer_release
 };
 
-static int new_buffer(struct buffer *buf)
+static int buffer_init(struct buffer *buf)
 {
 	struct wl_shm_pool *pool;
 	char shm_name[14];
@@ -363,37 +325,33 @@ static int new_buffer(struct buffer *buf)
 	int max = 100;
 
 	assert(!buf->busy);
-	if (buf->b) {
-		wl_buffer_destroy(buf->b);
-		munmap(buf->data, buf->size);
-	}
 
 	stride = term.width * 4;
 	buf->size = stride * term.height;
 
 	srand(time(NULL));
 	do {
-		errno = 0;
 		sprintf(shm_name, "/havoc-%d", rand() % 1000000);
 		fd = shm_open(shm_name, O_RDWR | O_CREAT | O_EXCL, 0600);
-	} while (errno == EEXIST && --max);
+	} while (fd < 0 && errno == EEXIST && --max);
 
 	if (fd < 0) {
-		fprintf(stderr, "shm_open failed: %s\n", strerror(errno));
+		fprintf(stderr, "shm_open failed: %m\n");
 		return -1;
 	}
+	shm_unlink(shm_name);
 
 	if (ftruncate(fd, buf->size) < 0) {
-		fprintf(stderr, "ftruncate failed: %s\n", strerror(errno));
+		fprintf(stderr, "ftruncate failed: %m\n");
+		close(fd);
 		return -1;
 	}
 
 	buf->data = mmap(NULL, buf->size, PROT_READ | PROT_WRITE, MAP_SHARED,
 			 fd, 0);
-	shm_unlink(shm_name);
 
 	if (buf->data == MAP_FAILED) {
-		fprintf(stderr, "mmap failed: %s\n", strerror(errno));
+		fprintf(stderr, "mmap failed: %m\n");
 		close(fd);
 		return -1;
 	}
@@ -401,13 +359,21 @@ static int new_buffer(struct buffer *buf)
 	pool = wl_shm_create_pool(term.shm, fd, buf->size);
 	buf->b = wl_shm_pool_create_buffer(pool, 0, term.width, term.height,
 					   stride, WL_SHM_FORMAT_ARGB8888);
-	wl_buffer_add_listener(buf->b, &buf_listener, buf);
+	wl_buffer_add_listener(buf->b, &buffer_listener, buf);
 	wl_shm_pool_destroy(pool);
 	close(fd);
 
 	buf->age = 0;
 
 	return 0;
+}
+
+static void buffer_unmap(struct buffer *buf)
+{
+	if (buf->b) {
+		wl_buffer_destroy(buf->b);
+		munmap(buf->data, buf->size);
+	}
 }
 
 static struct buffer *swap_buffers(void)
@@ -423,9 +389,11 @@ static struct buffer *swap_buffers(void)
 	else
 		abort();
 
-	if (term.resize)
-		if (new_buffer(buf) < 0)
-			exit(1);
+	if (term.resize) {
+		buffer_unmap(buf);
+		if (buffer_init(buf) < 0)
+			abort();
+	}
 
 	return buf;
 }
@@ -435,10 +403,10 @@ static struct buffer *swap_buffers(void)
 
 typedef uint_fast8_t uf8;
 
-static void blank(uint32_t *dst, uint w,
+static void blank(uint32_t *dst, unsigned w,
 		  uf8 br, uf8 bg, uf8 bb, uf8 ba)
 {
-	uint i;
+	unsigned i;
 	uint32_t b;
 	int h = term.cheight;
 
@@ -452,12 +420,12 @@ static void blank(uint32_t *dst, uint w,
 	}
 }
 
-static void print(uint32_t *dst, uint w,
+static void print(uint32_t *dst, unsigned w,
 		  uf8 br, uf8 bg, uf8 bb,
 		  uf8 fr, uf8 fg, uf8 fb,
-		  uf8 ba, uchr *glyph)
+		  uf8 ba, unsigned char *glyph)
 {
-	uint i;
+	unsigned i;
 	int h = term.cheight;
 
 	w *= term.cwidth;
@@ -509,7 +477,7 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 			      a->br, a->bg, a->bb, term.cfg.opacity);
 	} else {
 		/* todo, combining marks */
-		uchr *g = get_glyph(id, ch[0], char_width);
+		unsigned char *g = get_glyph(id, ch[0], char_width);
 
 		if (a->inverse)
 			print(dst, char_width,
@@ -599,13 +567,41 @@ static void reset_repeat(void)
 	timerfd_settime(term.repeat.fd, 0, &its, NULL);
 }
 
+static void setup_compose(void)
+{
+	struct xkb_compose_table *compose_table;
+	struct xkb_compose_state *compose_state;
+
+	compose_table =
+		xkb_compose_table_new_from_locale(term.xkb_ctx,
+						  getenv("LANG"),
+						  XKB_COMPOSE_COMPILE_NO_FLAGS);
+	if (!compose_table) {
+		fprintf(stderr, "could not create XKB compose table "
+				"for locale '%s'.\n", getenv("LANG"));
+		return;
+	}
+
+	compose_state = xkb_compose_state_new(compose_table,
+					      XKB_COMPOSE_STATE_NO_FLAGS);
+	if (!compose_state) {
+		fprintf(stderr, "could not create XKB compose state. "
+				"Disabling compose.\n");
+		xkb_compose_table_unref(compose_table);
+		return;
+	}
+
+	xkb_compose_table_unref(term.xkb_compose_table);
+	xkb_compose_state_unref(term.xkb_compose_state);
+	term.xkb_compose_table = compose_table;
+	term.xkb_compose_state = compose_state;
+}
+
 static void kbd_keymap(void *data, struct wl_keyboard *k, uint32_t fmt,
 		       int32_t fd, uint32_t size)
 {
 	struct xkb_keymap *keymap;
 	struct xkb_state *state;
-	struct xkb_compose_table *compose_table;
-	struct xkb_compose_state *compose_state;
 	char *map;
 
 	if (fmt != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
@@ -637,35 +633,12 @@ static void kbd_keymap(void *data, struct wl_keyboard *k, uint32_t fmt,
 		return;
 	}
 
-	/* Set up XKB compose table */
-	compose_table =
-		xkb_compose_table_new_from_locale(term.xkb_ctx,
-						  getenv("LANG"),
-						  XKB_COMPOSE_COMPILE_NO_FLAGS);
-	if (compose_table) {
-		/* Set up XKB compose state */
-		compose_state = xkb_compose_state_new(compose_table,
-					      XKB_COMPOSE_STATE_NO_FLAGS);
-		if (compose_state) {
-			xkb_compose_state_unref(term.xkb_compose_state);
-			xkb_compose_table_unref(term.xkb_compose_table);
-			term.xkb_compose_state = compose_state;
-			term.xkb_compose_table = compose_table;
-		} else {
-			fprintf(stderr, "could not create XKB compose state. "
-				"Disabling compose.\n");
-			xkb_compose_table_unref(compose_table);
-			compose_table = NULL;
-		}
-	} else {
-		fprintf(stderr, "could not create XKB compose table for locale '%s'.\n",
-			getenv("LANG"));
-	}
-
 	xkb_keymap_unref(term.xkb_keymap);
 	xkb_state_unref(term.xkb_state);
 	term.xkb_keymap = keymap;
 	term.xkb_state = state;
+
+	setup_compose();
 
 	term.xkb_ctrl = xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_CTRL);
 	term.xkb_alt = xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_ALT);
@@ -694,10 +667,9 @@ static xkb_keysym_t process_key(xkb_keysym_t sym)
 		return sym;
 
 	switch (xkb_compose_state_get_status(term.xkb_compose_state)) {
-	case XKB_COMPOSE_COMPOSING:
-		return XKB_KEY_NoSymbol;
 	case XKB_COMPOSE_COMPOSED:
 		return xkb_compose_state_get_one_sym(term.xkb_compose_state);
+	case XKB_COMPOSE_COMPOSING:
 	case XKB_COMPOSE_CANCELLED:
 		return XKB_KEY_NoSymbol;
 	case XKB_COMPOSE_NOTHING:
@@ -869,12 +841,12 @@ static void uncopy(void)
 	pss_cancelled(NULL, term.copy.source);
 }
 
-static inline uint grid_x(void)
+static inline unsigned grid_x(void)
 {
 	return wl_fixed_to_double(term.ptr_x) / term.cwidth;
 }
 
-static inline uint grid_y(void)
+static inline unsigned grid_y(void)
 {
 	return wl_fixed_to_double(term.ptr_y) / term.cheight;
 }
@@ -1016,9 +988,8 @@ static void pso_offer(void *data,
 		      struct gtk_primary_selection_offer *offer,
 		      const char *mime_type)
 {
-	if (strcmp(mime_type, "UTF8_STRING") == 0) {
+	if (strcmp(mime_type, "UTF8_STRING") == 0)
 		term.paste.acceptable = true;
-	}
 }
 
 static struct gtk_primary_selection_offer_listener pso_listener = {
@@ -1130,7 +1101,7 @@ static const struct xdg_wm_base_listener wm_base_listener = {
 static void shm_format(void *data, struct wl_shm *shm, uint32_t format)
 {
 	if (format == WL_SHM_FORMAT_ARGB8888)
-		term.has_argb = true;
+		term.shm_argb = true;
 }
 
 static const struct wl_shm_listener shm_listener = {
@@ -1147,7 +1118,7 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 		wl_shm_add_listener(term.shm, &shm_listener, NULL);
 	} else if (strcmp(i, "xdg_wm_base") == 0) {
 		term.wm_base = wl_registry_bind(r, id, &xdg_wm_base_interface,
-					      1);
+						1);
 		xdg_wm_base_add_listener(term.wm_base, &wm_base_listener, NULL);
 	} else if (strcmp(i, "wl_seat") == 0) {
 		term.seat = wl_registry_bind(r, id, &wl_seat_interface, 5);
@@ -1181,7 +1152,7 @@ void setup_pty(char *argv[])
 			execvp(*argv, argv);
 			prog = *argv;
 		} else {
-			execlp(term.cfg.shell, term.cfg.shell, NULL);
+			execlp(term.cfg.shell, term.cfg.shell, (char *) NULL);
 			prog = term.cfg.shell;
 		}
 		fprintf(stderr, "could not execute %s: %m", prog);
@@ -1194,9 +1165,12 @@ void setup_pty(char *argv[])
 
 #define CONF_FILE "havoc.cfg"
 
-static int clip(int a, int b, int c)
+static long cfg_num(const char *nptr, int base, long min, long max)
 {
-	return a < b ? b : a > c ? c : a;
+	long n;
+
+	n = strtol(nptr, NULL, base);
+	return n < min ? min : n > max ? max : n;
 }
 
 static void child_config(char *key, char *val)
@@ -1208,7 +1182,7 @@ static void child_config(char *key, char *val)
 static void window_config(char *key, char *val)
 {
 	if (strcmp(key, "opacity") == 0)
-		term.cfg.opacity = clip(atoi(val), 0, 255);
+		term.cfg.opacity = cfg_num(val, 10, 0, 255);
 	else if (strcmp(key, "margin") == 0)
 		term.cfg.margin = strcmp(val, "yes") == 0;
 }
@@ -1216,17 +1190,17 @@ static void window_config(char *key, char *val)
 static void terminal_config(char *key, char *val)
 {
 	if (strcmp(key, "rows") == 0)
-		term.cfg.row = clip(atoi(val), 1, 300);
+		term.cfg.row = cfg_num(val, 10, 1, 1000);
 	else if (strcmp(key, "columns") == 0)
-		term.cfg.col = clip(atoi(val), 1, 600);
+		term.cfg.col = cfg_num(val, 10, 1, 1000);
 	else if (strcmp(key, "scrollback") == 0)
-		term.cfg.scrollback = strtoul(val, NULL, 10);
+		term.cfg.scrollback = cfg_num(val, 10, 0, 1000000000);
 }
 
 static void font_config(char *key, char *val)
 {
 	if (strcmp(key, "size") == 0)
-		term.cfg.font_size = clip(atoi(val), 6, 200);
+		term.cfg.font_size = cfg_num(val, 10, 6, 300);
 	else if (strcmp(key, "path") == 0)
 		strncpy(term.cfg.font_path, val,
 			sizeof(term.cfg.font_path) - 1);
@@ -1241,30 +1215,21 @@ static void set_color(enum tsm_vte_color field, uint32_t val)
 
 static void color_config(char *key, char *val)
 {
-	uint32_t color;
-	char *p;
+	uint32_t color = 0;
 
-	if (*val == '#') {
-		color = strtol(++val, &p, 16);
-		if (*p != '\0')
-			goto invalid;
-	} else {
-		goto invalid;
-	}
+	if (*val == '#')
+		color = cfg_num(++val, 16, 0, 0xffffff);
 
 	if (strcmp(key, "foreground") == 0) {
 		set_color(TSM_COLOR_FOREGROUND, color);
 	} else if (strcmp(key, "background") == 0) {
 		set_color(TSM_COLOR_BACKGROUND, color);
-	} else if (strstr(key, "color") == key) {
-		long int i = strtol(key + 5, &p, 10);
+	} else if (strstr(key, "color") == key && *(key + 5) != '\0') {
+		char *p;
+		long i = strtol(key + 5, &p, 10);
 		if (*p == '\0' && i >= 0 && i < 16)
 			set_color(i, color);
 	}
-	return;
-
-invalid:
-	fprintf(stderr, "invalid color for %s\n", key);
 }
 
 static FILE *open_config(void)
@@ -1310,13 +1275,11 @@ static void read_config(void)
 	FILE *f = open_config();
 	char *key, *val, *p, line[512];
 	void (*section)(char *, char *) = NULL;
-	int i = 0;
 
 	if (f == NULL)
 		return;
 
 	while (fgets(line, sizeof(line), f)) {
-		++i;
 		key = line;
 		while (isblank(*key))
 			++key;
@@ -1327,10 +1290,8 @@ static void read_config(void)
 			continue;
 		case '[':
 			p = strchr(key, ']');
-			if (p == NULL) {
-				fprintf(stderr, "error on config line %d\n", i);
+			if (p == NULL)
 				continue;
-			}
 			*p = '\0';
 			++key;
 
@@ -1348,10 +1309,8 @@ static void read_config(void)
 			continue;
 		default:
 			val = strchr(key, '=');
-			if (val == NULL) {
-				fprintf(stderr, "error on config line %d\n", i);
+			if (val == NULL)
 				continue;
-			}
 
 			p = val - 1;
 			while (isblank(*p) && p > key) {
@@ -1426,73 +1385,64 @@ retry:
 	read_config();
 	setup_pty(argv);
 
+#define fail(e, s) { fprintf(stderr, s "\n"); goto e; }
+
 	if (font_init(term.cfg.font_size, term.cfg.font_path,
-		      &term.cwidth, &term.cheight) < 0) {
-		fprintf(stderr, "could not load font\n");
-		goto efont;
-	}
+		      &term.cwidth, &term.cheight) < 0)
+		fail(efont, "could not load font");
 
 	term.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 	if (term.xkb_ctx == NULL)
-		goto exkb;
+		fail(exkb, "failed to create xkb context");
 
 	term.display = wl_display_connect(term.opt.display);
-	if (term.display == NULL) {
-		fprintf(stderr, "could not connect to display\n");
-		goto econnect;
-	}
+	if (term.display == NULL)
+		fail(econnect, "could not connect to display");
 
 	term.registry = wl_display_get_registry(term.display);
 	wl_registry_add_listener(term.registry, &reg_listener, NULL);
 
 	wl_display_roundtrip(term.display);
-	if (!term.cp || !term.shm) {
-		fprintf(stderr, "missing required globals\n");
-		goto eglobals;
-	}
-	if (!term.wm_base) {
-		fprintf(stderr, "your compositor does not support xdg_wm_base,"
-			" make sure you have the latest version.\n");
-		goto eglobals;
-	}
+	if (!term.cp || !term.shm)
+		fail(eglobals, "missing required globals");
+	if (!term.wm_base)
+		fail(eglobals, "your compositor does not support xdg_wm_base,"
+			       " make sure you have the latest version");
 
 	wl_display_roundtrip(term.display);
-	if (term.has_argb == false) {
-		fprintf(stderr, "missing required formats\n");
-		goto eglobals;
-	}
+	if (term.shm_argb == false)
+		fail(eglobals, "missing required ARGB8888 shm format");
 
-	if (tsm_screen_new(&term.screen, log_tsm, NULL) < 0) {
-		fprintf(stderr, "failed to initialize tsm\n");
-		goto etsm;
-	}
+	if (tsm_screen_new(&term.screen) < 0)
+		fail(etsm, "failed to create tsm screen");
 	tsm_screen_set_max_sb(term.screen, term.cfg.scrollback);
 
-	if (tsm_vte_new(&term.vte, term.screen, wcb, NULL, log_tsm, NULL) < 0)
-		goto evte;
+	if (tsm_vte_new(&term.vte, term.screen, wcb, NULL) < 0)
+		fail(evte, "failed to create tsm vte");
 	tsm_vte_set_palette(term.vte, term.cfg.colors);
 
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)
-		goto esurf;
+		fail(esurf, "could not create surface");
+
 	term.xdgsurf = xdg_wm_base_get_xdg_surface(term.wm_base, term.surf);
 	if (term.xdgsurf == NULL)
-		goto exdgsurf;
+		fail(exdgsurf, "could not create xdg_surface");
 	xdg_surface_add_listener(term.xdgsurf, &surf_listener, NULL);
+
 	term.toplvl = xdg_surface_get_toplevel(term.xdgsurf);
 	if (term.toplvl == NULL)
-		goto etoplvl;
+		fail(etoplvl, "could not create xdg_toplevel");
 	xdg_toplevel_add_listener(term.toplvl, &toplvl_listener, NULL);
 	xdg_toplevel_set_title(term.toplvl, "havoc");
+
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
 
 	term.repeat.fd = timerfd_create(CLOCK_MONOTONIC,
 					TFD_NONBLOCK | TFD_CLOEXEC);
-	if (term.repeat.fd < 0) {
-		fprintf(stderr, "could not create key repeat timer: %m\n");
-		goto etimer;
-	}
+	if (term.repeat.fd < 0)
+		fail(etimer, "could not create key repeat timer: %m");
 
 	if (term.ps_dm && term.seat) {
 		term.ps_d = gtk_primary_selection_device_manager_get_device(
@@ -1532,10 +1482,8 @@ retry:
 
 	ret = 0;
 
-	if (term.buf[0].b)
-		wl_buffer_destroy(term.buf[0].b);
-	if (term.buf[1].b)
-		wl_buffer_destroy(term.buf[1].b);
+	buffer_unmap(&term.buf[0]);
+	buffer_unmap(&term.buf[1]);
 	if (term.cb)
 		wl_callback_destroy(term.cb);
 

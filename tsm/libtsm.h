@@ -51,43 +51,6 @@ extern "C" {
  */
 
 /**
- * @defgroup misc Miscellaneous Definitions
- * Miscellaneous definitions
- *
- * This section contains several miscellaneous definitions of small helpers and
- * constants. These are shared between other parts of the API and have common
- * semantics/syntax.
- *
- * @{
- */
-
-/**
- * Logging Callback
- *
- * @data: user-provided data
- * @file: Source code file where the log message originated or NULL
- * @line: Line number in source code or 0
- * @func: C function name or NULL
- * @subs: Subsystem where the message came from or NULL
- * @sev: Kernel-style severity between 0=FATAL and 7=DEBUG
- * @format: printf-formatted message
- * @args: arguments for printf-style @format
- *
- * This is the type of a logging callback function. You can always pass NULL
- * instead of such a function to disable logging.
- */
-typedef void (*tsm_log_t) (void *data,
-			   const char *file,
-			   int line,
-			   const char *func,
-			   const char *subs,
-			   unsigned int sev,
-			   const char *format,
-			   va_list args);
-
-/** @} */
-
-/**
  * @defgroup symbols Unicode Helpers
  * Unicode helpers
  *
@@ -178,7 +141,7 @@ typedef int (*tsm_screen_draw_cb) (struct tsm_screen *con,
 				   tsm_age_t age,
 				   void *data);
 
-int tsm_screen_new(struct tsm_screen **out, tsm_log_t log, void *log_data);
+int tsm_screen_new(struct tsm_screen **out);
 void tsm_screen_ref(struct tsm_screen *con);
 void tsm_screen_unref(struct tsm_screen *con);
 
@@ -297,8 +260,7 @@ typedef void (*tsm_vte_write_cb) (struct tsm_vte *vte,
 				  void *data);
 
 int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
-		tsm_vte_write_cb write_cb, void *data,
-		tsm_log_t log, void *log_data);
+		tsm_vte_write_cb write_cb, void *data);
 void tsm_vte_ref(struct tsm_vte *vte);
 void tsm_vte_unref(struct tsm_vte *vte);
 

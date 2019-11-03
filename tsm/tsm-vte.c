@@ -146,8 +146,6 @@ struct vte_saved_state {
 
 struct tsm_vte {
 	unsigned long ref;
-	tsm_log_t llog;
-	void *llog_data;
 	struct tsm_screen *con;
 	tsm_vte_write_cb write_cb;
 	void *data;
@@ -258,8 +256,7 @@ static void copy_bcolor(struct tsm_screen_attr *dest,
 
 SHL_EXPORT
 int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
-		tsm_vte_write_cb write_cb, void *data,
-		tsm_log_t log, void *log_data)
+		tsm_vte_write_cb write_cb, void *data)
 {
 	struct tsm_vte *vte;
 	int ret;
@@ -273,8 +270,6 @@ int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
 
 	memset(vte, 0, sizeof(*vte));
 	vte->ref = 1;
-	vte->llog = log;
-	vte->llog_data = log_data;
 	vte->con = con;
 	vte->write_cb = write_cb;
 	vte->data = data;
@@ -290,7 +285,6 @@ int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
 	tsm_vte_reset(vte);
 	tsm_screen_erase_screen(vte->con, false);
 
-	llog_debug(vte, "new vte object");
 	tsm_screen_ref(vte->con);
 	*out = vte;
 	return 0;
@@ -318,7 +312,6 @@ void tsm_vte_unref(struct tsm_vte *vte)
 	if (--vte->ref)
 		return;
 
-	llog_debug(vte, "destroying vte object");
 	tsm_screen_unref(vte->con);
 	tsm_utf8_mach_free(vte->mach);
 	free(vte);
