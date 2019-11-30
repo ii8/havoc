@@ -733,6 +733,11 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 	case XKB_KEY_Super_R:
 	case XKB_KEY_Hyper_L:
 	case XKB_KEY_Hyper_R:
+	case XKB_KEY_ISO_Level3_Shift:
+	case XKB_KEY_ISO_Level3_Lock:
+	case XKB_KEY_ISO_Level5_Shift:
+	case XKB_KEY_ISO_Level5_Lock:
+	case XKB_KEY_Caps_Lock:
 		return;
 	}
 
