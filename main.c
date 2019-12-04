@@ -17,6 +17,7 @@
 #include <xkbcommon/xkbcommon-compose.h>
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
+#include <wayland-cursor.h>
 
 #include "tsm/libtsm.h"
 #include "xdg-shell.h"
@@ -81,6 +82,15 @@ static struct {
 	struct wl_pointer *ptr;
 	wl_fixed_t ptr_x, ptr_y;
 	int select;
+
+	struct {
+		struct wl_cursor_theme *theme;
+		struct wl_cursor *current;
+		long long anim_start;
+		struct wl_surface *surface;
+		struct wl_callback *callback;
+		uint32_t enter_serial;
+	} cursor;
 
 	struct {
 		int fd;
@@ -208,6 +218,139 @@ static void handle_repeat(int ev)
 
 	tsm_vte_handle_keyboard(term.vte, term.repeat.sym, 0, term.mods,
 				term.repeat.unicode);
+}
+
+static long long now(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static void cursor_draw(int frame)
+{
+	struct wl_buffer *buffer;
+	struct wl_cursor_image *image;
+
+	if ((int)term.cursor.current->image_count <= frame) {
+		fprintf(stderr, "cursor frame index out of range\n");
+		return;
+	}
+
+	image = term.cursor.current->images[frame];
+	buffer = wl_cursor_image_get_buffer(image);
+	wl_surface_attach(term.cursor.surface, buffer, 0, 0);
+	wl_surface_damage(term.cursor.surface, 0, 0,
+			  image->width, image->height);
+	wl_surface_commit(term.cursor.surface);
+	wl_pointer_set_cursor(term.ptr, term.cursor.enter_serial,
+			      term.cursor.surface,
+			      image->hotspot_x, image->hotspot_y);
+}
+
+static void cursor_request_frame_callback(void);
+
+static void cursor_frame_callback(void *data, struct wl_callback *cb,
+				  uint32_t time)
+{
+	int frame = wl_cursor_frame(term.cursor.current,
+				    now() - term.cursor.anim_start);
+
+	assert(cb == term.cursor.callback);
+	wl_callback_destroy(term.cursor.callback);
+	cursor_request_frame_callback();
+	cursor_draw(frame);
+}
+
+static const struct wl_callback_listener cursor_frame_listener = {
+	cursor_frame_callback
+};
+
+static void cursor_request_frame_callback(void)
+{
+	term.cursor.callback = wl_surface_frame(term.cursor.surface);
+	wl_callback_add_listener(term.cursor.callback, &cursor_frame_listener,
+				 NULL);
+}
+
+static void cursor_unset(void)
+{
+	if (term.cursor.callback) {
+		wl_callback_destroy(term.cursor.callback);
+		term.cursor.callback = NULL;
+	}
+	term.cursor.current = NULL;
+}
+
+static void cursor_set(const char *name)
+{
+	uint32_t duration;
+	int frame;
+
+	cursor_unset();
+
+	if (term.ptr == NULL)
+		return;
+
+	if (term.cursor.theme == NULL)
+		goto hide;
+
+	if (name == NULL)
+		goto hide;
+
+	term.cursor.current = wl_cursor_theme_get_cursor(term.cursor.theme,
+							 name);
+	if (term.cursor.current == NULL)
+		goto hide;
+
+	frame = wl_cursor_frame_and_duration(term.cursor.current, 0, &duration);
+	if (duration) {
+		term.cursor.anim_start = now();
+		cursor_request_frame_callback();
+	}
+	cursor_draw(frame);
+
+	return;
+hide:
+	wl_pointer_set_cursor(term.ptr, term.cursor.enter_serial, NULL, 0, 0);
+}
+
+static void cursor_init(void)
+{
+	int size = 32;
+	char *size_str = getenv("XCURSOR_SIZE");
+
+	if (size_str && *size_str) {
+		char *end;
+		long s;
+
+		errno = 0;
+		s = strtol(size_str, &end, 10);
+		if (errno == 0 && *end == '\0' && s > 0)
+			size = s;
+	}
+
+	term.cursor.theme = wl_cursor_theme_load(getenv("XCURSOR_THEME"), size,
+						 term.shm);
+	if (term.cursor.theme == NULL)
+		return;
+
+	term.cursor.surface = wl_compositor_create_surface(term.cp);
+	if (term.cursor.surface == NULL) {
+		wl_cursor_theme_destroy(term.cursor.theme);
+		term.cursor.theme = NULL;
+	}
+}
+
+static void cursor_free(void)
+{
+	if (term.cursor.callback)
+		wl_callback_destroy(term.cursor.callback);
+	if (term.cursor.surface)
+		wl_surface_destroy(term.cursor.surface);
+	if (term.cursor.theme)
+		wl_cursor_theme_destroy(term.cursor.theme);
 }
 
 #define REPLACEMENT_CHAR 0x0000fffd
@@ -690,6 +833,8 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		return;
 	}
 
+	cursor_set(NULL);
+
 	sym = process_key(xkb_state_key_get_one_sym(term.xkb_state, key + 8));
 
 	switch (sym) {
@@ -843,12 +988,12 @@ static void uncopy(void)
 
 static inline unsigned grid_x(void)
 {
-	return wl_fixed_to_double(term.ptr_x) / term.cwidth;
+	return (wl_fixed_to_double(term.ptr_x) - term.margin.left) / term.cwidth;
 }
 
 static inline unsigned grid_y(void)
 {
-	return wl_fixed_to_double(term.ptr_y) / term.cheight;
+	return (wl_fixed_to_double(term.ptr_y) - term.margin.top) / term.cheight;
 }
 
 static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
@@ -857,11 +1002,15 @@ static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
 {
 	term.ptr_x = x;
 	term.ptr_y = y;
+
+	term.cursor.enter_serial = serial;
+	cursor_set("text");
 }
 
 static void ptr_leave(void *data, struct wl_pointer *wl_pointer,
 		      uint32_t serial, struct wl_surface *surface)
 {
+	cursor_unset();
 }
 
 static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
@@ -881,6 +1030,9 @@ static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
 		tsm_screen_selection_target(term.screen, grid_x(), grid_y());
 		term.need_redraw = true;
 	}
+
+	if (term.cursor.current == NULL)
+		cursor_set("text");
 }
 
 static void ptr_button(void *data, struct wl_pointer *wl_pointer,
@@ -908,6 +1060,9 @@ static void ptr_button(void *data, struct wl_pointer *wl_pointer,
 		   state == WL_POINTER_BUTTON_STATE_RELEASED) {
 		paste();
 	}
+
+	if (term.cursor.current == NULL)
+		cursor_set("text");
 }
 
 static void ptr_axis(void *data, struct wl_pointer *wl_pointer,
@@ -972,6 +1127,7 @@ static void seat_capabilities(void *data, struct wl_seat *seat, uint32_t caps)
 	} else if (!(caps & WL_SEAT_CAPABILITY_POINTER) && term.ptr) {
 		wl_pointer_release(term.ptr);
 		term.ptr = NULL;
+		cursor_unset();
 	}
 }
 
@@ -1305,6 +1461,8 @@ static void read_config(void)
 				section = &font_config;
 			else if (strcmp(key, "colors") == 0)
 				section = &color_config;
+			else
+				section = NULL;
 
 			continue;
 		default:
@@ -1413,6 +1571,8 @@ retry:
 	if (term.shm_argb == false)
 		fail(eglobals, "missing required ARGB8888 shm format");
 
+	cursor_init();
+
 	if (tsm_screen_new(&term.screen) < 0)
 		fail(etsm, "failed to create tsm screen");
 	tsm_screen_set_max_sb(term.screen, term.cfg.scrollback);
@@ -1506,6 +1666,7 @@ esurf:
 evte:
 	tsm_screen_unref(term.screen);
 etsm:
+	cursor_free();
 eglobals:
 	if (term.ps_dm)
 		gtk_primary_selection_device_manager_destroy(term.ps_dm);
