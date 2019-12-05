@@ -216,8 +216,8 @@ static void handle_repeat(int ev)
 	if (read(term.repeat.fd, &exp, sizeof exp) < 0)
 		return;
 
-	tsm_vte_handle_keyboard(term.vte, term.repeat.sym, 0, term.mods,
-				term.repeat.unicode);
+	tsm_vte_handle_keyboard(term.vte, term.repeat.sym, XKB_KEY_NoSymbol,
+				term.mods, term.repeat.unicode);
 }
 
 static long long now(void)
@@ -435,7 +435,7 @@ static void handle_paste(int ev)
 				break;
 			}
 			tsm_vte_handle_keyboard(term.vte, XKB_KEY_NoSymbol,
-						0, 0, code);
+						XKB_KEY_NoSymbol, 0, code);
 		}
 	} else if (ev & EPOLLHUP) {
 		end_paste();
@@ -799,7 +799,7 @@ static void kbd_leave(void *data, struct wl_keyboard *k, uint32_t serial,
 	reset_repeat();
 }
 
-static xkb_keysym_t process_key(xkb_keysym_t sym)
+static xkb_keysym_t compose(xkb_keysym_t sym)
 {
 	if (!term.xkb_compose_state)
 		return sym;
@@ -827,6 +827,9 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 	xkb_keysym_t sym;
 	uint32_t unicode;
 
+	if (!term.xkb_keymap || !term.xkb_state)
+		return;
+
 	if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
 		if (term.repeat.key == key)
 			reset_repeat();
@@ -835,31 +838,20 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 
 	cursor_set(NULL);
 
-	sym = process_key(xkb_state_key_get_one_sym(term.xkb_state, key + 8));
+	sym = compose(xkb_state_key_get_one_sym(term.xkb_state, key + 8));
 
-	switch (sym) {
-	case XKB_KEY_Shift_L:
-	case XKB_KEY_Shift_R:
-	case XKB_KEY_Control_L:
-	case XKB_KEY_Control_R:
-	case XKB_KEY_Alt_L:
-	case XKB_KEY_Alt_R:
-	case XKB_KEY_Meta_L:
-	case XKB_KEY_Meta_R:
-	case XKB_KEY_Super_L:
-	case XKB_KEY_Super_R:
-	case XKB_KEY_Hyper_L:
-	case XKB_KEY_Hyper_R:
-		return;
-	}
+	unicode = xkb_keysym_to_utf32(sym);
+	if (unicode == 0)
+		unicode = TSM_VTE_INVALID;
 
-	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-		unicode = xkb_keysym_to_utf32(sym);
+	tsm_vte_handle_keyboard(term.vte, sym, XKB_KEY_NoSymbol,
+				term.mods, unicode);
+
+	if (xkb_keymap_key_repeats(term.xkb_keymap, key + 8)) {
 		term.repeat.key = key;
 		term.repeat.sym = sym;
 		term.repeat.unicode = unicode;
 		timerfd_settime(term.repeat.fd, 0, &term.repeat.its, NULL);
-		tsm_vte_handle_keyboard(term.vte, sym, 0, term.mods, unicode);
 	}
 }
 
@@ -867,22 +859,21 @@ static void kbd_mods(void *data, struct wl_keyboard *k, uint32_t serial,
 		     uint32_t depressed, uint32_t latched, uint32_t locked,
 		     uint32_t group)
 {
-	xkb_mod_mask_t m;
-
-	if (!term.xkb_keymap)
+	if (!term.xkb_keymap || !term.xkb_state)
 		return;
 
 	xkb_state_update_mask(term.xkb_state, depressed, latched, locked,
 			      0, 0, group);
 
-	m = xkb_state_serialize_mods(term.xkb_state, XKB_STATE_MODS_EFFECTIVE);
-
 	term.mods = 0;
-	if (m & 1 << term.xkb_alt)
+	if (xkb_state_mod_index_is_active(term.xkb_state, term.xkb_alt,
+					  XKB_STATE_MODS_EFFECTIVE) == 1)
 		term.mods |= TSM_ALT_MASK;
-	if (m & 1 << term.xkb_ctrl)
+	if (xkb_state_mod_index_is_active(term.xkb_state, term.xkb_ctrl,
+					  XKB_STATE_MODS_EFFECTIVE) == 1)
 		term.mods |= TSM_CONTROL_MASK;
-	if (m & 1 << term.xkb_shift)
+	if (xkb_state_mod_index_is_active(term.xkb_state, term.xkb_shift,
+					  XKB_STATE_MODS_EFFECTIVE) == 1)
 		term.mods |= TSM_SHIFT_MASK;
 
 	reset_repeat();
