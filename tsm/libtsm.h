@@ -296,6 +296,8 @@ void tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len);
 bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
 			     uint32_t ascii, unsigned int mods,
 			     uint32_t unicode);
+void tsm_vte_paste_begin(struct tsm_vte *vte);
+void tsm_vte_paste_end(struct tsm_vte *vte);
 
 /** @} */
 

@@ -133,6 +133,9 @@ enum parser_action {
 #define FLAG_BACKGROUND_COLOR_ERASE_MODE	0x00008000 /* Set background color on erase (bce) */
 #define FLAG_PREPEND_ESCAPE			0x00010000 /* Prepend escape character to next output */
 #define FLAG_TITE_INHIBIT_MODE			0x00020000 /* Prevent switching to alternate screen buffer */
+#define FLAG_BRACKETED_PASTE_MODE		0x00040000
+
+#define ENDPASTE "\e[201~"
 
 struct vte_saved_state {
 	unsigned int cursor_x;
@@ -176,6 +179,9 @@ struct tsm_vte {
 	struct vte_saved_state saved_state;
 	unsigned int alt_cursor_x;
 	unsigned int alt_cursor_y;
+
+	bool pasting;
+	int endpaste_i;
 };
 
 static uint8_t default_palette[TSM_COLOR_NUM][3] = {
@@ -342,6 +348,27 @@ void tsm_vte_get_def_attr(struct tsm_vte *vte, struct tsm_screen_attr *out)
 	memcpy(out, &vte->def_attr, sizeof(*out));
 }
 
+static void write_safe(struct tsm_vte *vte, const char *u8, size_t len)
+{
+	if (vte->pasting) {
+		if (*u8 == ENDPASTE[vte->endpaste_i]) {
+			if (ENDPASTE[++vte->endpaste_i] == '\0') {
+				llog_warning(vte, "ignoring ESC[201~ escape "
+						  "sequence in pasted text");
+				vte->endpaste_i = 0;
+			}
+			return;
+		} else if (vte->endpaste_i) {
+			vte->write_cb(vte, ENDPASTE, vte->endpaste_i,
+				      vte->data);
+			vte->endpaste_i = 0;
+			if (*u8 == '\e')
+				vte->endpaste_i++;
+		}
+	}
+	vte->write_cb(vte, u8, len, vte->data);
+}
+
 /*
  * Write raw byte-stream to pty.
  * When writing data to the client we must make sure that we send the correct
@@ -399,8 +426,8 @@ static void vte_write_debug(struct tsm_vte *vte, const char *u8, size_t len,
 	}
 
 	if (vte->flags & FLAG_PREPEND_ESCAPE)
-		vte->write_cb(vte, "\e", 1, vte->data);
-	vte->write_cb(vte, u8, len, vte->data);
+		write_safe(vte, "\e", 1);
+	write_safe(vte, u8, len);
 
 	vte->flags &= ~FLAG_PREPEND_ESCAPE;
 }
@@ -1359,6 +1386,9 @@ static void csi_mode(struct tsm_vte *vte, bool set)
 				tsm_screen_move_to(vte->con, vte->alt_cursor_x,
 						   vte->alt_cursor_y);
 			}
+			continue;
+		case 2004:
+			set_reset_flag(vte, set, FLAG_BRACKETED_PASTE_MODE);
 			continue;
 		default:
 			llog_debug(vte, "unknown DEC %set-Mode %d",
@@ -2679,4 +2709,26 @@ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
 
 	vte->flags &= ~FLAG_PREPEND_ESCAPE;
 	return false;
+}
+
+SHL_EXPORT
+void tsm_vte_paste_begin(struct tsm_vte *vte)
+{
+	if (vte->flags & FLAG_BRACKETED_PASTE_MODE) {
+		vte_write(vte, "\e[200~", 6);
+		vte->pasting = true;
+		vte->endpaste_i = 0;
+	}
+}
+
+SHL_EXPORT
+void tsm_vte_paste_end(struct tsm_vte *vte)
+{
+	if (vte->pasting) {
+		vte->pasting = false;
+		if (vte->endpaste_i)
+			vte->write_cb(vte, ENDPASTE, vte->endpaste_i,
+				      vte->data);
+		vte_write(vte, "\e[201~", 6);
+	}
 }

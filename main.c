@@ -6,6 +6,7 @@
 #include <ctype.h>
 
 #include <errno.h>
+#include <limits.h>
 #include <time.h>
 #include <sys/mman.h>
 #include <sys/epoll.h>
@@ -167,6 +168,7 @@ static struct {
 
 static void wcb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
 {
+	assert(len <= PIPE_BUF);
 	if (term.master_fd >= 0 && write(term.master_fd, u8, len) < 0) {
 		fprintf(stderr, "could not write to pty master: %m\n");
 		abort();
@@ -405,6 +407,7 @@ static int utf8_to_utf32(char const **utf8, size_t *len, uint32_t *r)
 
 static void end_paste(void)
 {
+	tsm_vte_paste_end(term.vte);
 	epoll_ctl(term.fd, EPOLL_CTL_DEL, term.paste.fd[0], NULL);
 	close(term.paste.fd[0]);
 	term.paste.len = 0;
@@ -921,12 +924,14 @@ static void paste(void)
 
 	gtk_primary_selection_offer_receive(term.paste.offer, "UTF8_STRING",
 					    term.paste.fd[1]);
+	close(term.paste.fd[1]);
 
 	ee.events = EPOLLIN;
 	ee.data.ptr = &pfp;
 	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.paste.fd[0], &ee);
 
 	term.paste.active = true;
+	tsm_vte_paste_begin(term.vte);
 }
 
 static void pss_send(void *data,
@@ -1341,7 +1346,7 @@ static void terminal_config(char *key, char *val)
 	else if (strcmp(key, "columns") == 0)
 		term.cfg.col = cfg_num(val, 10, 1, 1000);
 	else if (strcmp(key, "scrollback") == 0)
-		term.cfg.scrollback = cfg_num(val, 10, 0, 1000000000);
+		term.cfg.scrollback = cfg_num(val, 10, 0, UINT_MAX);
 }
 
 static void font_config(char *key, char *val)
