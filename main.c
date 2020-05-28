@@ -1421,7 +1421,7 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "wl_shell") == 0) {
 		term.shell = wl_registry_bind(r, id, &wl_shell_interface, 1);
 	} else if (strcmp(i, "wl_seat") == 0) {
-		term.seat = wl_registry_bind(r, id, &wl_seat_interface, 5);
+		term.seat = wl_registry_bind(r, id, &wl_seat_interface, 2);
 		wl_seat_add_listener(term.seat, &seat_listener, NULL);
 	} else if (strcmp(i, "wl_data_device_manager") == 0) {
 		term.d_dm = wl_registry_bind(r, id,
