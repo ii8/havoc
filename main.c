@@ -717,14 +717,18 @@ static void setup_compose(void)
 {
 	struct xkb_compose_table *compose_table;
 	struct xkb_compose_state *compose_state;
+	char *lang = getenv("LANG");
+
+	if (lang == NULL)
+		return;
 
 	compose_table =
 		xkb_compose_table_new_from_locale(term.xkb_ctx,
-						  getenv("LANG"),
+						  lang,
 						  XKB_COMPOSE_COMPILE_NO_FLAGS);
 	if (!compose_table) {
 		fprintf(stderr, "could not create XKB compose table "
-				"for locale '%s'.\n", getenv("LANG"));
+				"for locale '%s'.\n", lang);
 		return;
 	}
 
