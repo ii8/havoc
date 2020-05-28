@@ -21,7 +21,6 @@
 #include <wayland-cursor.h>
 
 #include "tsm/libtsm.h"
-#include "xdg-shell.h"
 #include "gtk-primary-selection.h"
 
 int font_init(int, char *, int *, int *);
@@ -42,12 +41,11 @@ static struct {
 	struct wl_compositor *cp;
 	struct wl_shm *shm;
 	bool shm_argb;
-	struct xdg_wm_base *wm_base;
+	struct wl_shell *shell;
 	struct wl_seat *seat;
 
 	struct wl_surface *surf;
-	struct xdg_surface *xdgsurf;
-	struct xdg_toplevel *toplvl;
+	struct wl_shell_surface *shell_surf;
 
 	struct buffer {
 		struct wl_buffer *b;
@@ -1342,35 +1340,23 @@ static const struct gtk_primary_selection_device_listener psd_listener = {
 	psd_selection
 };
 
-static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
-			     int32_t width, int32_t height,
-			     struct wl_array *state)
+static void ping(void *data, struct wl_shell_surface *surf, uint32_t serial)
 {
-	term.configured = false;
+	wl_shell_surface_pong(surf, serial);
+}
+
+static void configure(void *data, struct wl_shell_surface *surf,
+		      uint32_t edges, int32_t width, int32_t height)
+{
 	term.confwidth = width ? width : term.cfg.col * term.cwidth;
 	term.confheight = height ? height : term.cfg.row * term.cheight;
-}
 
-static void toplvl_close(void *data, struct xdg_toplevel *t)
-{
-	term.die = true;
-}
-
-static const struct xdg_toplevel_listener toplvl_listener = {
-	toplvl_configure,
-	toplvl_close
-};
-
-static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
-{
-	xdg_surface_ack_configure(surf, serial);
 	int col = term.confwidth / term.cwidth;
 	int row = term.confheight / term.cheight;
 	struct winsize ws = {
 		row, col, 0, 0
 	};
 
-	assert(!term.configured);
 	term.configured = true;
 
 	if (col == 0 || row == 0)
@@ -1404,17 +1390,14 @@ static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
 	term.resize = 2;
 }
 
-static const struct xdg_surface_listener surf_listener = {
-	configure
-};
-
-static void ping(void *data, struct xdg_wm_base *wm_base, uint32_t serial)
+static void popup_done(void *data, struct wl_shell_surface *surf)
 {
-	xdg_wm_base_pong(wm_base, serial);
 }
 
-static const struct xdg_wm_base_listener wm_base_listener = {
-	ping
+static const struct wl_shell_surface_listener surf_listener = {
+	ping,
+	configure,
+	popup_done
 };
 
 static void shm_format(void *data, struct wl_shm *shm, uint32_t format)
@@ -1435,10 +1418,8 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "wl_shm") == 0) {
 		term.shm = wl_registry_bind(r, id, &wl_shm_interface, 1);
 		wl_shm_add_listener(term.shm, &shm_listener, NULL);
-	} else if (strcmp(i, "xdg_wm_base") == 0) {
-		term.wm_base = wl_registry_bind(r, id, &xdg_wm_base_interface,
-						1);
-		xdg_wm_base_add_listener(term.wm_base, &wm_base_listener, NULL);
+	} else if (strcmp(i, "wl_shell") == 0) {
+		term.shell = wl_registry_bind(r, id, &wl_shell_interface, 1);
 	} else if (strcmp(i, "wl_seat") == 0) {
 		term.seat = wl_registry_bind(r, id, &wl_seat_interface, 5);
 		wl_seat_add_listener(term.seat, &seat_listener, NULL);
@@ -1729,9 +1710,9 @@ retry:
 	wl_display_roundtrip(term.display);
 	if (!term.cp || !term.shm)
 		fail(eglobals, "missing required globals");
-	if (!term.wm_base)
-		fail(eglobals, "your compositor does not support xdg_wm_base,"
-			       " make sure you have the latest version");
+	if (!term.shell)
+		fail(eglobals, "your compositor does not support wl_shell,"
+			       " maybe you should use the xdg_wm_base havoc");
 
 	wl_display_roundtrip(term.display);
 	if (term.shm_argb == false)
@@ -1751,16 +1732,12 @@ retry:
 	if (term.surf == NULL)
 		fail(esurf, "could not create surface");
 
-	term.xdgsurf = xdg_wm_base_get_xdg_surface(term.wm_base, term.surf);
-	if (term.xdgsurf == NULL)
-		fail(exdgsurf, "could not create xdg_surface");
-	xdg_surface_add_listener(term.xdgsurf, &surf_listener, NULL);
-
-	term.toplvl = xdg_surface_get_toplevel(term.xdgsurf);
-	if (term.toplvl == NULL)
-		fail(etoplvl, "could not create xdg_toplevel");
-	xdg_toplevel_add_listener(term.toplvl, &toplvl_listener, NULL);
-	xdg_toplevel_set_title(term.toplvl, "havoc");
+	term.shell_surf = wl_shell_get_shell_surface(term.shell, term.surf);
+	if (term.shell_surf == NULL)
+		fail(eshellsurf, "could not create wl_shell_surface");
+	wl_shell_surface_add_listener(term.shell_surf, &surf_listener, NULL);
+	wl_shell_surface_set_toplevel(term.shell_surf);
+	wl_shell_surface_set_title(term.shell_surf, "havoc");
 
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
@@ -1830,10 +1807,8 @@ etimer:
 	if (term.kbd)
 		wl_keyboard_release(term.kbd);
 
-	xdg_toplevel_destroy(term.toplvl);
-etoplvl:
-	xdg_surface_destroy(term.xdgsurf);
-exdgsurf:
+	wl_shell_surface_destroy(term.shell_surf);
+eshellsurf:
 	wl_surface_destroy(term.surf);
 esurf:
 	tsm_vte_unref(term.vte);
@@ -1848,8 +1823,8 @@ eglobals:
 		wl_data_device_manager_destroy(term.d_dm);
 	if (term.seat)
 		wl_seat_destroy(term.seat);
-	if (term.wm_base)
-		xdg_wm_base_destroy(term.wm_base);
+	if (term.shell)
+		wl_shell_destroy(term.shell);
 	if (term.shm)
 		wl_shm_destroy(term.shm);
 	if (term.cp)
