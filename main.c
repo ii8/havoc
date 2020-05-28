@@ -1774,6 +1774,7 @@ retry:
 	ee[0].data.ptr = &rfp;
 	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.repeat.fd, &ee[0]);
 
+	configure(NULL, term.shell_surf, 0, 0, 0);
 	while (!term.die) {
 		if (term.can_redraw && term.need_redraw && term.configured)
 			redraw();
