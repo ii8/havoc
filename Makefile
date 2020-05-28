@@ -8,10 +8,9 @@ BINDIR=$(PREFIX)/bin
 
 CFLAGS=-Wall -Wextra -Wno-unused-parameter -Wno-parentheses
 
-VPATH=$(PROTDIR)/stable/xdg-shell
 LIBS=-lrt -lm -lutil -lwayland-client -lwayland-cursor -lxkbcommon -Ltsm -lhtsm
-OBJ=gtk-primary-selection.o glyph.o main.o
-GEN=gtk-primary-selection.c gtk-primary-selection.h
+OBJ=surface-extension.o gtk-primary-selection.o glyph.o main.o
+GEN=surface-extension.c surface-extension.h gtk-primary-selection.c gtk-primary-selection.h
 
 havoc: tsm $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)

@@ -22,6 +22,7 @@
 
 #include "tsm/libtsm.h"
 #include "gtk-primary-selection.h"
+#include "surface-extension.h"
 
 int font_init(int, char *, int *, int *);
 void font_deinit(void);
@@ -43,9 +44,11 @@ static struct {
 	bool shm_argb;
 	struct wl_shell *shell;
 	struct wl_seat *seat;
+	struct qt_surface_extension *qt_ext;
 
 	struct wl_surface *surf;
 	struct wl_shell_surface *shell_surf;
+	struct qt_extended_surface *ext_surf;
 
 	struct buffer {
 		struct wl_buffer *b;
@@ -1348,8 +1351,8 @@ static void ping(void *data, struct wl_shell_surface *surf, uint32_t serial)
 static void configure(void *data, struct wl_shell_surface *surf,
 		      uint32_t edges, int32_t width, int32_t height)
 {
-	term.confwidth = width ? width : term.cfg.col * term.cwidth;
-	term.confheight = height ? height : term.cfg.row * term.cheight;
+	term.confwidth = height;
+	term.confheight = width;
 
 	int col = term.confwidth / term.cwidth;
 	int row = term.confheight / term.cheight;
@@ -1400,6 +1403,30 @@ static const struct wl_shell_surface_listener surf_listener = {
 	popup_done
 };
 
+static void onscreen_visibility(void *data,
+				struct qt_extended_surface *qt_extended_surface,
+				int32_t visible)
+{
+}
+
+static void set_generic_property(void *data,
+				 struct qt_extended_surface *qt_extended_surface,
+				 const char *name,
+				 struct wl_array *value)
+{
+}
+
+static void qtclose(void *data, struct qt_extended_surface *qt_extended_surface)
+{
+	term.die = true;
+}
+
+static const struct qt_extended_surface_listener ext_surf_listener = {
+	onscreen_visibility,
+	set_generic_property,
+	qtclose
+};
+
 static void shm_format(void *data, struct wl_shm *shm, uint32_t format)
 {
 	if (format == WL_SHM_FORMAT_ARGB8888)
@@ -1414,7 +1441,7 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 			 const char *i, uint32_t version)
 {
 	if (strcmp(i, "wl_compositor") == 0) {
-		term.cp = wl_registry_bind(r, id, &wl_compositor_interface, 1);
+		term.cp = wl_registry_bind(r, id, &wl_compositor_interface, 2);
 	} else if (strcmp(i, "wl_shm") == 0) {
 		term.shm = wl_registry_bind(r, id, &wl_shm_interface, 1);
 		wl_shm_add_listener(term.shm, &shm_listener, NULL);
@@ -1429,6 +1456,8 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "gtk_primary_selection_device_manager") == 0) {
 		term.ps_dm = wl_registry_bind(r, id,
 			&gtk_primary_selection_device_manager_interface, 1);
+	} else if (strcmp(i, "qt_surface_extension") == 0) {
+		term.qt_ext = wl_registry_bind(r, id, &qt_surface_extension_interface, 1);
 	}
 }
 
@@ -1731,13 +1760,18 @@ retry:
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)
 		fail(esurf, "could not create surface");
+	wl_surface_set_buffer_transform(term.surf, WL_OUTPUT_TRANSFORM_90);
 
 	term.shell_surf = wl_shell_get_shell_surface(term.shell, term.surf);
 	if (term.shell_surf == NULL)
 		fail(eshellsurf, "could not create wl_shell_surface");
 	wl_shell_surface_add_listener(term.shell_surf, &surf_listener, NULL);
-	wl_shell_surface_set_toplevel(term.shell_surf);
+	wl_shell_surface_set_maximized(term.shell_surf, NULL);
 	wl_shell_surface_set_title(term.shell_surf, "havoc");
+
+	term.ext_surf = qt_surface_extension_get_extended_surface(term.qt_ext, term.surf);
+	qt_extended_surface_add_listener(term.ext_surf, &ext_surf_listener, NULL);
+	qt_extended_surface_set_content_orientation_mask(term.ext_surf, QT_EXTENDED_SURFACE_ORIENTATION_LANDSCAPEORIENTATION);
 
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
@@ -1774,7 +1808,6 @@ retry:
 	ee[0].data.ptr = &rfp;
 	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.repeat.fd, &ee[0]);
 
-	configure(NULL, term.shell_surf, 0, 0, 0);
 	while (!term.die) {
 		if (term.can_redraw && term.need_redraw && term.configured)
 			redraw();
