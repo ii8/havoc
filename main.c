@@ -1351,8 +1351,8 @@ static void ping(void *data, struct wl_shell_surface *surf, uint32_t serial)
 static void configure(void *data, struct wl_shell_surface *surf,
 		      uint32_t edges, int32_t width, int32_t height)
 {
-	term.confwidth = height;
-	term.confheight = width;
+	term.confwidth = width;
+	term.confheight = height;
 
 	int col = term.confwidth / term.cwidth;
 	int row = term.confheight / term.cheight;
@@ -1760,7 +1760,7 @@ retry:
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)
 		fail(esurf, "could not create surface");
-	wl_surface_set_buffer_transform(term.surf, WL_OUTPUT_TRANSFORM_90);
+	// wl_surface_set_buffer_transform(term.surf, WL_OUTPUT_TRANSFORM_90);
 
 	term.shell_surf = wl_shell_get_shell_surface(term.shell, term.surf);
 	if (term.shell_surf == NULL)
@@ -1770,8 +1770,15 @@ retry:
 	wl_shell_surface_set_title(term.shell_surf, "havoc");
 
 	term.ext_surf = qt_surface_extension_get_extended_surface(term.qt_ext, term.surf);
+	if (term.ext_surf == NULL)
+		fail(eextsurf, "could not create qt_extended_surface");
 	qt_extended_surface_add_listener(term.ext_surf, &ext_surf_listener, NULL);
-	qt_extended_surface_set_content_orientation_mask(term.ext_surf, QT_EXTENDED_SURFACE_ORIENTATION_LANDSCAPEORIENTATION);
+	qt_extended_surface_set_content_orientation_mask(term.ext_surf,
+		QT_EXTENDED_SURFACE_ORIENTATION_PRIMARYORIENTATION |
+		QT_EXTENDED_SURFACE_ORIENTATION_PORTRAITORIENTATION |
+		QT_EXTENDED_SURFACE_ORIENTATION_LANDSCAPEORIENTATION |
+		QT_EXTENDED_SURFACE_ORIENTATION_INVERTEDPORTRAITORIENTATION |
+		QT_EXTENDED_SURFACE_ORIENTATION_INVERTEDLANDSCAPEORIENTATION);
 
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
@@ -1841,6 +1848,8 @@ etimer:
 	if (term.kbd)
 		wl_keyboard_release(term.kbd);
 
+	qt_extended_surface_destroy(term.ext_surf);
+eextsurf:
 	wl_shell_surface_destroy(term.shell_surf);
 eshellsurf:
 	wl_surface_destroy(term.surf);

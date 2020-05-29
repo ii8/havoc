@@ -1,5 +1,5 @@
 *.o
 *.a
-xdg-shell.[ch]
+surface-extension.[ch]
 gtk-primary-selection.[ch]
 havoc
