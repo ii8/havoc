@@ -158,6 +158,7 @@ struct tsm_vte {
 	unsigned long parse_cnt;
 
 	unsigned int state;
+	tsm_symbol_t last_sym;
 	unsigned int csi_argc;
 	int csi_argv[CSI_ARG_MAX];
 	unsigned int csi_flags;
@@ -440,6 +441,7 @@ static void vte_write_debug(struct tsm_vte *vte, const char *u8, size_t len,
 /* write to console */
 static void write_console(struct tsm_vte *vte, tsm_symbol_t sym)
 {
+	vte->last_sym = sym;
 	to_rgb(vte, &vte->cattr);
 	tsm_screen_write(vte->con, sym, &vte->cattr);
 }
@@ -524,6 +526,7 @@ void tsm_vte_reset(struct tsm_vte *vte)
 
 	tsm_utf8_mach_reset(vte->mach);
 	vte->state = STATE_GROUND;
+	vte->last_sym = ' ';
 	vte->gl = &vte->g0;
 	vte->gr = &vte->g1;
 	vte->glt = NULL;
@@ -1454,6 +1457,14 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
 		if (num <= 0)
 			num = 1;
 		tsm_screen_move_down(vte->con, num, false);
+		break;
+	case 'b': /* REP */
+		/* repeat the preceding character */
+		num = vte->csi_argv[0];
+		if (num <= 0)
+			num = 1;
+		while (num--)
+			write_console(vte, vte->last_sym);
 		break;
 	case 'C': /* CUF */
 		/* move cursor forward */
