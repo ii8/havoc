@@ -19,6 +19,9 @@ havoc: tsm $(OBJ)
 install: havoc
 	install -D -t $(DESTDIR)$(BINDIR) havoc
 
+uninstall:
+	rm -f $(DESTDIR)$(BINDIR)/havoc
+
 clean:
 	$(MAKE) -C tsm clean
 	rm -f havoc $(GEN) $(OBJ)
@@ -34,4 +37,4 @@ $(OBJ): $(GEN)
 tsm:
 	$(MAKE) -C $@
 
-.PHONY: install clean tsm
+.PHONY: install clean tsm uninstall
