@@ -421,12 +421,12 @@ static void vte_write_debug(struct tsm_vte *vte, const char *u8, size_t len,
 
 	/* in local echo mode, directly parse the data again */
 	if (!vte->parse_cnt && !(vte->flags & FLAG_SEND_RECEIVE_MODE)) {
-		if (vte->flags & FLAG_PREPEND_ESCAPE)
+		if (vte->flags & FLAG_PREPEND_ESCAPE && u8[0] != '\e')
 			tsm_vte_input(vte, "\e", 1);
 		tsm_vte_input(vte, u8, len);
 	}
 
-	if (vte->flags & FLAG_PREPEND_ESCAPE)
+	if (vte->flags & FLAG_PREPEND_ESCAPE && u8[0] != '\e')
 		write_safe(vte, "\e", 1);
 	write_safe(vte, u8, len);
 
@@ -437,6 +437,26 @@ static void vte_write_debug(struct tsm_vte *vte, const char *u8, size_t len,
 	vte_write_debug((_vte), (_u8), (_len), false, __FILE__, __LINE__)
 #define vte_write_raw(_vte, _u8, _len) \
 	vte_write_debug((_vte), (_u8), (_len), true, __FILE__, __LINE__)
+
+static void vte_write_fnkey(struct tsm_vte *vte, bool ss3, unsigned int mods,
+			    int index, char c)
+{
+	char buf[10];
+	int len;
+	int fnmod = 1
+		  + (mods & TSM_SHIFT_MASK ? 1 : 0)
+		  + (mods & TSM_ALT_MASK ? 2 : 0)
+		  + (mods & TSM_CONTROL_MASK ? 4 : 0);
+
+	if (fnmod > 1) {
+		if (index <= 0)
+			index = 1;
+		len = sprintf(buf, "\e[%d;%d%c", index, fnmod, c);
+	} else {
+		len = sprintf(buf, "\e%c%.0d%c", ss3 ? 'O' : '[', index, c);
+	}
+	vte_write(vte, buf, len);
+}
 
 /* write to console */
 static void write_console(struct tsm_vte *vte, tsm_symbol_t sym)
@@ -554,7 +574,7 @@ void tsm_vte_hard_reset(struct tsm_vte *vte)
 
 static void send_primary_da(struct tsm_vte *vte)
 {
-	vte_write(vte, "\e[?60;1;6;9;15c", 15);
+	vte_write(vte, "\e[?62;1;6;9;15c", 15);
 }
 
 /* execute control character (C0 or C1) */
@@ -2391,52 +2411,44 @@ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
 				vte_write(vte, "\x0d", 1);
 			return true;
 		case XKB_KEY_Find:
-			vte_write(vte, "\e[1~", 4);
+			vte_write_fnkey(vte, false, mods, 1, '~');
 			return true;
 		case XKB_KEY_Insert:
-			vte_write(vte, "\e[2~", 4);
+			vte_write_fnkey(vte, false, mods, 2, '~');
 			return true;
 		case XKB_KEY_Delete:
-			vte_write(vte, "\e[3~", 4);
+			vte_write_fnkey(vte, false, mods, 3, '~');
 			return true;
 		case XKB_KEY_Select:
-			vte_write(vte, "\e[4~", 4);
+			vte_write_fnkey(vte, false, mods, 4, '~');
 			return true;
 		case XKB_KEY_Page_Up:
 		case XKB_KEY_KP_Page_Up:
-			vte_write(vte, "\e[5~", 4);
+			vte_write_fnkey(vte, false, mods, 5, '~');
 			return true;
-		case XKB_KEY_KP_Page_Down:
 		case XKB_KEY_Page_Down:
-			vte_write(vte, "\e[6~", 4);
+		case XKB_KEY_KP_Page_Down:
+			vte_write_fnkey(vte, false, mods, 6, '~');
 			return true;
 		case XKB_KEY_Up:
 		case XKB_KEY_KP_Up:
-			if (vte->flags & FLAG_CURSOR_KEY_MODE)
-				vte_write(vte, "\eOA", 3);
-			else
-				vte_write(vte, "\e[A", 3);
+			vte_write_fnkey(vte, vte->flags & FLAG_CURSOR_KEY_MODE,
+					mods, 0, 'A');
 			return true;
 		case XKB_KEY_Down:
 		case XKB_KEY_KP_Down:
-			if (vte->flags & FLAG_CURSOR_KEY_MODE)
-				vte_write(vte, "\eOB", 3);
-			else
-				vte_write(vte, "\e[B", 3);
+			vte_write_fnkey(vte, vte->flags & FLAG_CURSOR_KEY_MODE,
+					mods, 0, 'B');
 			return true;
 		case XKB_KEY_Right:
 		case XKB_KEY_KP_Right:
-			if (vte->flags & FLAG_CURSOR_KEY_MODE)
-				vte_write(vte, "\eOC", 3);
-			else
-				vte_write(vte, "\e[C", 3);
+			vte_write_fnkey(vte, vte->flags & FLAG_CURSOR_KEY_MODE,
+					mods, 0, 'C');
 			return true;
 		case XKB_KEY_Left:
 		case XKB_KEY_KP_Left:
-			if (vte->flags & FLAG_CURSOR_KEY_MODE)
-				vte_write(vte, "\eOD", 3);
-			else
-				vte_write(vte, "\e[D", 3);
+			vte_write_fnkey(vte, vte->flags & FLAG_CURSOR_KEY_MODE,
+					mods, 0, 'D');
 			return true;
 		case XKB_KEY_KP_Insert:
 		case XKB_KEY_KP_0:
@@ -2539,158 +2551,80 @@ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
 			return true;
 		case XKB_KEY_Home:
 		case XKB_KEY_KP_Home:
-			if (vte->flags & FLAG_CURSOR_KEY_MODE)
-				vte_write(vte, "\eOH", 3);
-			else
-				vte_write(vte, "\e[H", 3);
+			vte_write_fnkey(vte, vte->flags & FLAG_CURSOR_KEY_MODE,
+					mods, 0, 'H');
 			return true;
 		case XKB_KEY_End:
 		case XKB_KEY_KP_End:
-			if (vte->flags & FLAG_CURSOR_KEY_MODE)
-				vte_write(vte, "\eOF", 3);
-			else
-				vte_write(vte, "\e[F", 3);
+			vte_write_fnkey(vte, vte->flags & FLAG_CURSOR_KEY_MODE,
+					mods, 0, 'F');
 			return true;
 		case XKB_KEY_KP_Space:
 			vte_write(vte, " ", 1);
 			return true;
-		/* TODO: check what to transmit for functions keys when
-		 * shift/ctrl etc. are pressed. Every terminal behaves
-		 * differently here which is really weird.
-		 * We now map F4 to F14 if shift is pressed and so on for all
-		 * keys. However, such mappings should rather be done via
-		 * xkb-configurations and we should instead add a flags argument
-		 * to the CSIs as some of the keys here already do. */
 		case XKB_KEY_F1:
 		case XKB_KEY_KP_F1:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[23~", 5);
-			else
-				vte_write(vte, "\eOP", 3);
+			vte_write_fnkey(vte, true, mods, 0, 'P');
 			return true;
 		case XKB_KEY_F2:
 		case XKB_KEY_KP_F2:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[24~", 5);
-			else
-				vte_write(vte, "\eOQ", 3);
+			vte_write_fnkey(vte, true, mods, 0, 'Q');
 			return true;
 		case XKB_KEY_F3:
 		case XKB_KEY_KP_F3:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[25~", 5);
-			else
-				vte_write(vte, "\eOR", 3);
+			vte_write_fnkey(vte, true, mods, 0, 'R');
 			return true;
 		case XKB_KEY_F4:
 		case XKB_KEY_KP_F4:
-			if (mods & TSM_SHIFT_MASK)
-				//vte_write(vte, "\e[1;2S", 6);
-				vte_write(vte, "\e[26~", 5);
-			else
-				vte_write(vte, "\eOS", 3);
+			vte_write_fnkey(vte, true, mods, 0, 'S');
 			return true;
 		case XKB_KEY_F5:
-			if (mods & TSM_SHIFT_MASK)
-				//vte_write(vte, "\e[15;2~", 7);
-				vte_write(vte, "\e[28~", 5);
-			else
-				vte_write(vte, "\e[15~", 5);
+			vte_write_fnkey(vte, false, mods, 15, '~');
 			return true;
 		case XKB_KEY_F6:
-			if (mods & TSM_SHIFT_MASK)
-				//vte_write(vte, "\e[17;2~", 7);
-				vte_write(vte, "\e[29~", 5);
-			else
-				vte_write(vte, "\e[17~", 5);
+			vte_write_fnkey(vte, false, mods, 17, '~');
 			return true;
 		case XKB_KEY_F7:
-			if (mods & TSM_SHIFT_MASK)
-				//vte_write(vte, "\e[18;2~", 7);
-				vte_write(vte, "\e[31~", 5);
-			else
-				vte_write(vte, "\e[18~", 5);
+			vte_write_fnkey(vte, false, mods, 18, '~');
 			return true;
 		case XKB_KEY_F8:
-			if (mods & TSM_SHIFT_MASK)
-				//vte_write(vte, "\e[19;2~", 7);
-				vte_write(vte, "\e[32~", 5);
-			else
-				vte_write(vte, "\e[19~", 5);
+			vte_write_fnkey(vte, false, mods, 19, '~');
 			return true;
 		case XKB_KEY_F9:
-			if (mods & TSM_SHIFT_MASK)
-				//vte_write(vte, "\e[20;2~", 7);
-				vte_write(vte, "\e[33~", 5);
-			else
-				vte_write(vte, "\e[20~", 5);
+			vte_write_fnkey(vte, false, mods, 20, '~');
 			return true;
 		case XKB_KEY_F10:
-			if (mods & TSM_SHIFT_MASK)
-				//vte_write(vte, "\e[21;2~", 7);
-				vte_write(vte, "\e[34~", 5);
-			else
-				vte_write(vte, "\e[21~", 5);
+			vte_write_fnkey(vte, false, mods, 21, '~');
 			return true;
 		case XKB_KEY_F11:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[23;2~", 7);
-			else
-				vte_write(vte, "\e[23~", 5);
+			vte_write_fnkey(vte, false, mods, 23, '~');
 			return true;
 		case XKB_KEY_F12:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[24;2~", 7);
-			else
-				vte_write(vte, "\e[24~", 5);
+			vte_write_fnkey(vte, false, mods, 24, '~');
 			return true;
 		case XKB_KEY_F13:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[25;2~", 7);
-			else
-				vte_write(vte, "\e[25~", 5);
+			vte_write_fnkey(vte, false, mods, 25, '~');
 			return true;
 		case XKB_KEY_F14:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[26;2~", 7);
-			else
-				vte_write(vte, "\e[26~", 5);
+			vte_write_fnkey(vte, false, mods, 26, '~');
 			return true;
 		case XKB_KEY_F15:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[28;2~", 7);
-			else
-				vte_write(vte, "\e[28~", 5);
+			vte_write_fnkey(vte, false, mods, 28, '~');
 			return true;
 		case XKB_KEY_F16:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[29;2~", 7);
-			else
-				vte_write(vte, "\e[29~", 5);
+			vte_write_fnkey(vte, false, mods, 29, '~');
 			return true;
 		case XKB_KEY_F17:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[31;2~", 7);
-			else
-				vte_write(vte, "\e[31~", 5);
+			vte_write_fnkey(vte, false, mods, 31, '~');
 			return true;
 		case XKB_KEY_F18:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[32;2~", 7);
-			else
-				vte_write(vte, "\e[32~", 5);
+			vte_write_fnkey(vte, false, mods, 32, '~');
 			return true;
 		case XKB_KEY_F19:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[33;2~", 7);
-			else
-				vte_write(vte, "\e[33~", 5);
+			vte_write_fnkey(vte, false, mods, 33, '~');
 			return true;
 		case XKB_KEY_F20:
-			if (mods & TSM_SHIFT_MASK)
-				vte_write(vte, "\e[34;2~", 7);
-			else
-				vte_write(vte, "\e[34~", 5);
+			vte_write_fnkey(vte, false, mods, 34, '~');
 			return true;
 	}
 
