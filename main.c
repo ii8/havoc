@@ -562,7 +562,7 @@ typedef uint_fast8_t uf8;
 static void blank(uint32_t *dst, unsigned w,
 		  uf8 br, uf8 bg, uf8 bb, uf8 ba)
 {
-	unsigned i;
+	int i;
 	uint32_t b;
 	int h = term.cheight;
 
@@ -581,7 +581,7 @@ static void print(uint32_t *dst, unsigned w,
 		  uf8 fr, uf8 fg, uf8 fb,
 		  uf8 ba, unsigned char *glyph)
 {
-	unsigned i;
+	int i;
 	int h = term.cheight;
 
 	w *= term.cwidth;
@@ -1774,11 +1774,7 @@ retry:
 		fail(eextsurf, "could not create qt_extended_surface");
 	qt_extended_surface_add_listener(term.ext_surf, &ext_surf_listener, NULL);
 	qt_extended_surface_set_content_orientation_mask(term.ext_surf,
-		QT_EXTENDED_SURFACE_ORIENTATION_PRIMARYORIENTATION |
-		QT_EXTENDED_SURFACE_ORIENTATION_PORTRAITORIENTATION |
-		QT_EXTENDED_SURFACE_ORIENTATION_LANDSCAPEORIENTATION |
-		QT_EXTENDED_SURFACE_ORIENTATION_INVERTEDPORTRAITORIENTATION |
-		QT_EXTENDED_SURFACE_ORIENTATION_INVERTEDLANDSCAPEORIENTATION);
+		QT_EXTENDED_SURFACE_ORIENTATION_LANDSCAPEORIENTATION);
 
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
