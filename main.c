@@ -1718,6 +1718,7 @@ retry:
 	}
 	read_config();
 	setup_pty(argv);
+	kbd_repeat(NULL, NULL, 15, 500);
 
 #define fail(e, s) { fprintf(stderr, s "\n"); goto e; }
 
