@@ -1429,6 +1429,13 @@ static const struct qt_extended_surface_listener ext_surf_listener = {
 	qtclose
 };
 
+enum Qt_TouchPointState {
+	Qt_TouchPointPressed = 0x01,
+	Qt_TouchPointMoved = 0x02,
+	Qt_TouchPointStationary = 0x04,
+	Qt_TouchPointReleased = 0x08
+};
+
 static void qt_touch(void *data,
 		     struct qt_touch_extension *qt_touch_extension,
 		     uint32_t time,
@@ -1446,41 +1453,83 @@ static void qt_touch(void *data,
 		     uint32_t flags,
 		     struct wl_array *rawdata)
 {
-	printf("touch {\n"
-	       "    time = %u\n"
-	       "    id = %u\n"
-	       "    state = %u\n"
-	       "    x = %i\n"
-	       "    y = %i\n"
-	       "    normalized_x = %i\n"
-	       "    normalized_y = %i\n"
-	       "    width = %i\n"
-	       "    height = %i\n"
-	       "    pressure = %u\n"
-	       "    velocity_x = %i\n"
-	       "    velocity_y = %i\n"
-	       "    flags = %u\n"
-	       "}\n",
-		time,
-		id,
-		state,
-		x,
-		y,
-		normalized_x,
-		normalized_y,
-		width,
-		height,
-		pressure,
-		velocity_x,
-		velocity_y,
-		flags);
+	static uint32_t tp1 = 0;
+	static uint32_t tp2 = 0;
+	static int tp1_grid_x = 0;
+	static int tp1_grid_y = 0;
+	static int tp2_grid_x = 0;
+	static int tp2_grid_y = 0;
+
+	int grid_x = (((float)normalized_y / 10000.0) * term.height) - term.margin.top;
+	int grid_y = (((float)(10000 - normalized_x) / 10000.0) * term.width) - term.margin.left;
+
+	if (grid_x < 0)
+		grid_x = 0;
+	if (grid_x >= term.col * term.cwidth)
+		grid_x = term.col * term.cwidth - 1;
+	if (grid_y < 0)
+		grid_y = 0;
+	if (grid_y >= term.row * term.cheight)
+		grid_y = term.row * term.cheight - 1;
+
+	grid_x /= term.cwidth;
+	grid_y /= term.cheight;
+
+	if (id == tp1) {
+		if ((state & 0xFFFF) & Qt_TouchPointReleased) {
+			tp1 = tp2;
+			tp1_grid_x = tp2_grid_x;
+			tp1_grid_y = tp2_grid_y;
+			tp2 = 0;
+		} else {
+			if (grid_x != tp1_grid_x || grid_y != tp1_grid_y) {
+				if (tp2) {
+					tsm_screen_selection_anchor(term.screen, grid_x, grid_y);
+				} else {
+					int diff = grid_y - tp1_grid_y;
+					if (diff > 0)
+						tsm_screen_sb_up(term.screen, diff);
+					else
+						tsm_screen_sb_down(term.screen, -diff);
+				}
+				term.need_redraw = true;
+				tp1_grid_x = grid_x;
+				tp1_grid_y = grid_y;
+			}
+		}
+	} else if (id == tp2) {
+		assert(tp1);
+		if ((state & 0xFFFF) & Qt_TouchPointReleased) {
+			tp2 = 0;
+		} else {
+			if (grid_x != tp2_grid_x || grid_y != tp2_grid_y) {
+				tsm_screen_selection_target(term.screen, grid_x, grid_y);
+				term.need_redraw = true;
+				tp2_grid_x = grid_x;
+				tp2_grid_y = grid_y;
+			}
+		}
+	} else {
+		if (tp1 == 0) {
+			tsm_screen_selection_reset(term.screen);
+			tp1 = id;
+			tp1_grid_x = grid_x;
+			tp1_grid_y = grid_y;
+		} else if (tp2 == 0) {
+			tsm_screen_selection_start(term.screen, tp1_grid_x, tp1_grid_y);
+			tsm_screen_selection_target(term.screen, grid_x, grid_y);
+			tp2 = id;
+			tp2_grid_x = grid_x;
+			tp2_grid_y = grid_y;
+		}
+		term.need_redraw = true;
+	}
 }
 
 static void qt_touch_configure(void *data,
 			       struct qt_touch_extension *qt_touch_extension,
 			       uint32_t flags)
 {
-	printf("touch_configure {\n\tflags: %u\n}\n", flags);
 }
 
 static const struct qt_touch_extension_listener qt_touch_listener = {

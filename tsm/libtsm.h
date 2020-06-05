@@ -213,6 +213,9 @@ void tsm_screen_selection_reset(struct tsm_screen *con);
 void tsm_screen_selection_start(struct tsm_screen *con,
 				unsigned int posx,
 				unsigned int posy);
+void tsm_screen_selection_anchor(struct tsm_screen *con,
+				 unsigned int posx,
+				 unsigned int posy);
 void tsm_screen_selection_target(struct tsm_screen *con,
 				 unsigned int posx,
 				 unsigned int posy);
