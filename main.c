@@ -1459,9 +1459,18 @@ static void qt_touch(void *data,
 	static int tp1_grid_y = 0;
 	static int tp2_grid_x = 0;
 	static int tp2_grid_y = 0;
+	static uint32_t released[16] = { 0 };
+	static int released_i = 0;
 
 	int grid_x = (((float)normalized_y / 10000.0) * term.height) - term.margin.top;
 	int grid_y = (((float)(10000 - normalized_x) / 10000.0) * term.width) - term.margin.left;
+
+
+	if ((state & 0xFFFF) & Qt_TouchPointReleased) {
+		released[released_i++] = id;
+		if (released_i == 16)
+			released_i = 0;
+	}
 
 	if (grid_x < 0)
 		grid_x = 0;
@@ -1510,19 +1519,26 @@ static void qt_touch(void *data,
 			}
 		}
 	} else {
+		int i;
+		for (i = 0; i < 16; i++) {
+			if (id == released[i])
+				return;
+		}
+
 		if (tp1 == 0) {
 			tsm_screen_selection_reset(term.screen);
+			term.need_redraw = true;
 			tp1 = id;
 			tp1_grid_x = grid_x;
 			tp1_grid_y = grid_y;
 		} else if (tp2 == 0) {
 			tsm_screen_selection_start(term.screen, tp1_grid_x, tp1_grid_y);
 			tsm_screen_selection_target(term.screen, grid_x, grid_y);
+			term.need_redraw = true;
 			tp2 = id;
 			tp2_grid_x = grid_x;
 			tp2_grid_y = grid_y;
 		}
-		term.need_redraw = true;
 	}
 }
 
