@@ -1315,7 +1315,7 @@ static void csi_mode(struct tsm_vte *vte, bool set)
 				tsm_screen_reset_flags(vte->con,
 						TSM_SCREEN_REL_ORIGIN);
 			continue;
-		case 7: /* DECAWN */
+		case 7: /* DECAWM */
 			set_reset_flag(vte, set, FLAG_AUTO_WRAP_MODE);
 			if (set)
 				tsm_screen_set_flags(vte->con,
@@ -1613,6 +1613,7 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
 		if (lower < 0)
 			lower = 0;
 		tsm_screen_set_margins(vte->con, upper, lower);
+		tsm_screen_move_to(vte->con, 0, 0);
 		break;
 	case 'c': /* DA */
 		/* device attributes */
