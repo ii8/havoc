@@ -1,5 +1,6 @@
 *.o
 *.a
 surface-extension.[ch]
+touch-extension.[ch]
 gtk-primary-selection.[ch]
 havoc

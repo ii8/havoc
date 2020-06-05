@@ -23,6 +23,7 @@
 #include "tsm/libtsm.h"
 #include "gtk-primary-selection.h"
 #include "surface-extension.h"
+#include "touch-extension.h"
 
 int font_init(int, char *, int *, int *);
 void font_deinit(void);
@@ -45,6 +46,7 @@ static struct {
 	struct wl_shell *shell;
 	struct wl_seat *seat;
 	struct qt_surface_extension *qt_ext;
+	struct qt_touch_extension *qt_touch;
 
 	struct wl_surface *surf;
 	struct wl_shell_surface *shell_surf;
@@ -1427,6 +1429,65 @@ static const struct qt_extended_surface_listener ext_surf_listener = {
 	qtclose
 };
 
+static void qt_touch(void *data,
+		     struct qt_touch_extension *qt_touch_extension,
+		     uint32_t time,
+		     uint32_t id,
+		     uint32_t state,
+		     int32_t x,
+		     int32_t y,
+		     int32_t normalized_x,
+		     int32_t normalized_y,
+		     int32_t width,
+		     int32_t height,
+		     uint32_t pressure,
+		     int32_t velocity_x,
+		     int32_t velocity_y,
+		     uint32_t flags,
+		     struct wl_array *rawdata)
+{
+	printf("touch {\n"
+	       "    time = %u\n"
+	       "    id = %u\n"
+	       "    state = %u\n"
+	       "    x = %i\n"
+	       "    y = %i\n"
+	       "    normalized_x = %i\n"
+	       "    normalized_y = %i\n"
+	       "    width = %i\n"
+	       "    height = %i\n"
+	       "    pressure = %u\n"
+	       "    velocity_x = %i\n"
+	       "    velocity_y = %i\n"
+	       "    flags = %u\n"
+	       "}\n",
+		time,
+		id,
+		state,
+		x,
+		y,
+		normalized_x,
+		normalized_y,
+		width,
+		height,
+		pressure,
+		velocity_x,
+		velocity_y,
+		flags);
+}
+
+static void qt_touch_configure(void *data,
+			       struct qt_touch_extension *qt_touch_extension,
+			       uint32_t flags)
+{
+	printf("touch_configure {\n\tflags: %u\n}\n", flags);
+}
+
+static const struct qt_touch_extension_listener qt_touch_listener = {
+	qt_touch,
+	qt_touch_configure
+};
+
 static void shm_format(void *data, struct wl_shm *shm, uint32_t format)
 {
 	if (format == WL_SHM_FORMAT_ARGB8888)
@@ -1458,6 +1519,9 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 			&gtk_primary_selection_device_manager_interface, 1);
 	} else if (strcmp(i, "qt_surface_extension") == 0) {
 		term.qt_ext = wl_registry_bind(r, id, &qt_surface_extension_interface, 1);
+	} else if (strcmp(i, "qt_touch_extension") == 0) {
+		term.qt_touch = wl_registry_bind(r, id, &qt_touch_extension_interface, 1);
+		qt_touch_extension_add_listener(term.qt_touch, &qt_touch_listener, NULL);
 	}
 }
 
@@ -1761,7 +1825,7 @@ retry:
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)
 		fail(esurf, "could not create surface");
-	// wl_surface_set_buffer_transform(term.surf, WL_OUTPUT_TRANSFORM_90);
+	wl_surface_set_buffer_transform(term.surf, WL_OUTPUT_TRANSFORM_270);
 
 	term.shell_surf = wl_shell_get_shell_surface(term.shell, term.surf);
 	if (term.shell_surf == NULL)
