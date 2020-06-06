@@ -736,10 +736,10 @@ static void paste(bool primary)
 
 	if (primary) {
 		gtk_primary_selection_offer_receive(term.paste.ps_offer,
-						    "UTF8_STRING",
+						    "text/plain",
 						    term.paste.fd[1]);
 	} else {
-		wl_data_offer_receive(term.paste.d_offer, "UTF8_STRING",
+		wl_data_offer_receive(term.paste.d_offer, "text/plain",
 				      term.paste.fd[1]);
 	}
 	close(term.paste.fd[1]);
@@ -798,7 +798,7 @@ static void d_copy(uint32_t serial)
 
 	term.d_copy.source =
 		wl_data_device_manager_create_data_source(term.d_dm);
-	wl_data_source_offer(term.d_copy.source, "UTF8_STRING");
+	wl_data_source_offer(term.d_copy.source, "text/plain");
 	wl_data_source_add_listener(term.d_copy.source, &ds_listener, NULL);
 	wl_data_device_set_selection(term.d_d, term.d_copy.source, serial);
 	tsm_screen_selection_copy(term.screen, &term.d_copy.data);
@@ -1064,7 +1064,7 @@ static void ps_copy(uint32_t serial)
 
 	term.ps_copy.source =
 		gtk_primary_selection_device_manager_create_source(term.ps_dm);
-	gtk_primary_selection_source_offer(term.ps_copy.source, "UTF8_STRING");
+	gtk_primary_selection_source_offer(term.ps_copy.source, "text/plain");
 	gtk_primary_selection_source_add_listener(term.ps_copy.source,
 						  &pss_listener, NULL);
 	gtk_primary_selection_device_set_selection(term.ps_d,
@@ -1240,7 +1240,7 @@ static const struct wl_seat_listener seat_listener = {
 
 static void do_offer(void *d, struct wl_data_offer *o, const char *mime_type)
 {
-	if (strcmp(mime_type, "UTF8_STRING") == 0)
+	if (strcmp(mime_type, "text/plain") == 0)
 		term.paste.d_acceptable = true;
 }
 
@@ -1310,7 +1310,7 @@ static void pso_offer(void *data,
 		      struct gtk_primary_selection_offer *offer,
 		      const char *mime_type)
 {
-	if (strcmp(mime_type, "UTF8_STRING") == 0)
+	if (strcmp(mime_type, "text/plain") == 0)
 		term.paste.ps_acceptable = true;
 }
 
