@@ -101,17 +101,26 @@ static struct {
 		struct itimerspec its;
 	} repeat;
 
+	struct wl_data_device_manager *d_dm;
+	struct wl_data_device *d_d;
 	struct gtk_primary_selection_device_manager *ps_dm;
 	struct gtk_primary_selection_device *ps_d;
 
 	struct {
-		struct gtk_primary_selection_source *source;
+		struct wl_data_source *source;
 		char *data;
-	} copy;
+	} d_copy;
 
 	struct {
-		struct gtk_primary_selection_offer *offer;
-		bool acceptable;
+		struct gtk_primary_selection_source *source;
+		char *data;
+	} ps_copy;
+
+	struct {
+		struct wl_data_offer *d_offer;
+		struct gtk_primary_selection_offer *ps_offer;
+		bool d_acceptable;
+		bool ps_acceptable;
 
 		int fd[2];
 		char buf[200];
@@ -704,6 +713,105 @@ static void redraw(void)
 	}
 }
 
+static void paste(bool primary)
+{
+	struct epoll_event ee;
+
+	if (primary) {
+		if (!term.ps_dm || !term.paste.ps_acceptable)
+			return;
+	} else {
+		if (!term.d_dm || !term.paste.d_acceptable)
+			return;
+	}
+
+	if (term.paste.active)
+		end_paste();
+
+	if (pipe(term.paste.fd) < 0)
+		return;
+
+	if (primary) {
+		gtk_primary_selection_offer_receive(term.paste.ps_offer,
+						    "UTF8_STRING",
+						    term.paste.fd[1]);
+	} else {
+		wl_data_offer_receive(term.paste.d_offer, "UTF8_STRING",
+				      term.paste.fd[1]);
+	}
+	close(term.paste.fd[1]);
+
+	ee.events = EPOLLIN;
+	ee.data.ptr = &pfp;
+	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.paste.fd[0], &ee);
+
+	term.paste.active = true;
+	tsm_vte_paste_begin(term.vte);
+}
+
+static void ds_target(void *d, struct wl_data_source *ds, const char *mt)
+{
+}
+
+static void ds_send(void *data, struct wl_data_source *ds,
+		    const char *mime_type, int32_t fd)
+{
+	write(fd, term.d_copy.data, strlen(term.d_copy.data));
+	close(fd);
+}
+
+static void ds_cancelled(void *data, struct wl_data_source *source)
+{
+	wl_data_source_destroy(term.d_copy.source);
+	term.d_copy.source = NULL;
+	free(term.d_copy.data);
+}
+
+static void ds_dnd_drop_performed(void *data, struct wl_data_source *ds)
+{
+}
+
+static void ds_dnd_finished(void *data, struct wl_data_source *ds)
+{
+}
+
+static void ds_action(void *data, struct wl_data_source *ds, uint32_t a)
+{
+}
+
+static struct wl_data_source_listener ds_listener = {
+	ds_target,
+	ds_send,
+	ds_cancelled,
+	ds_dnd_drop_performed,
+	ds_dnd_finished,
+	ds_action
+};
+
+static void d_copy(uint32_t serial)
+{
+	if (!term.d_dm)
+		return;
+
+	term.d_copy.source =
+		wl_data_device_manager_create_data_source(term.d_dm);
+	wl_data_source_offer(term.d_copy.source, "UTF8_STRING");
+	wl_data_source_add_listener(term.d_copy.source, &ds_listener, NULL);
+	wl_data_device_set_selection(term.d_d, term.d_copy.source, serial);
+	tsm_screen_selection_copy(term.screen, &term.d_copy.data);
+}
+
+static void d_uncopy(void)
+{
+	if (!term.d_dm)
+		return;
+
+	if (!term.d_copy.source)
+		return;
+
+	ds_cancelled(NULL, term.d_copy.source);
+}
+
 static void reset_repeat(void)
 {
 	struct itimerspec its = {
@@ -851,6 +959,20 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 	if (unicode == 0)
 		unicode = TSM_VTE_INVALID;
 
+	if (term.mods == (TSM_CONTROL_MASK | TSM_SHIFT_MASK)) {
+		switch (sym) {
+		case XKB_KEY_c:
+		case XKB_KEY_C:
+			d_uncopy();
+			d_copy(serial);
+			return;
+		case XKB_KEY_v:
+		case XKB_KEY_V:
+			paste(false);
+			return;
+		}
+	}
+
 	tsm_vte_handle_keyboard(term.vte, sym, XKB_KEY_NoSymbol,
 				term.mods, unicode);
 
@@ -910,49 +1032,21 @@ static struct wl_keyboard_listener kbd_listener = {
 	kbd_repeat
 };
 
-static void paste(void)
-{
-	struct epoll_event ee;
-
-	if (!term.ps_dm)
-		return;
-
-	if (!term.paste.acceptable)
-		return;
-
-	if (term.paste.active)
-		end_paste();
-
-	if (pipe(term.paste.fd) < 0)
-		return;
-
-	gtk_primary_selection_offer_receive(term.paste.offer, "UTF8_STRING",
-					    term.paste.fd[1]);
-	close(term.paste.fd[1]);
-
-	ee.events = EPOLLIN;
-	ee.data.ptr = &pfp;
-	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.paste.fd[0], &ee);
-
-	term.paste.active = true;
-	tsm_vte_paste_begin(term.vte);
-}
-
 static void pss_send(void *data,
 		     struct gtk_primary_selection_source *source,
 		     const char *mime_type,
 		     int32_t fd)
 {
-	write(fd, term.copy.data, strlen(term.copy.data));
+	write(fd, term.ps_copy.data, strlen(term.ps_copy.data));
 	close(fd);
 }
 
 static void pss_cancelled(void *data,
 			  struct gtk_primary_selection_source *source)
 {
-	gtk_primary_selection_source_destroy(term.copy.source);
-	term.copy.source = NULL;
-	free(term.copy.data);
+	gtk_primary_selection_source_destroy(term.ps_copy.source);
+	term.ps_copy.source = NULL;
+	free(term.ps_copy.data);
 }
 
 static struct gtk_primary_selection_source_listener pss_listener = {
@@ -960,30 +1054,31 @@ static struct gtk_primary_selection_source_listener pss_listener = {
 	pss_cancelled
 };
 
-static void copy(uint32_t serial)
+static void ps_copy(uint32_t serial)
 {
 	if (!term.ps_dm)
 		return;
 
-	term.copy.source =
+	term.ps_copy.source =
 		gtk_primary_selection_device_manager_create_source(term.ps_dm);
-	gtk_primary_selection_source_offer(term.copy.source, "UTF8_STRING");
-	gtk_primary_selection_source_add_listener(term.copy.source,
+	gtk_primary_selection_source_offer(term.ps_copy.source, "UTF8_STRING");
+	gtk_primary_selection_source_add_listener(term.ps_copy.source,
 						  &pss_listener, NULL);
-	gtk_primary_selection_device_set_selection(term.ps_d, term.copy.source,
+	gtk_primary_selection_device_set_selection(term.ps_d,
+						   term.ps_copy.source,
 						   serial);
-	tsm_screen_selection_copy(term.screen, &term.copy.data);
+	tsm_screen_selection_copy(term.screen, &term.ps_copy.data);
 }
 
-static void uncopy(void)
+static void ps_uncopy(void)
 {
 	if (!term.ps_dm)
 		return;
 
-	if (!term.copy.source)
+	if (!term.ps_copy.source)
 		return;
 
-	pss_cancelled(NULL, term.copy.source);
+	pss_cancelled(NULL, term.ps_copy.source);
 }
 
 static inline unsigned grid_x(void)
@@ -1021,7 +1116,7 @@ static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
 
 	switch (term.select) {
 	case 1:
-		uncopy();
+		ps_uncopy();
 		term.select = 2;
 		tsm_screen_selection_start(term.screen, grid_x(), grid_y());
 		term.need_redraw = true;
@@ -1050,7 +1145,7 @@ static void ptr_button(void *data, struct wl_pointer *wl_pointer,
 			break;
 		case WL_POINTER_BUTTON_STATE_RELEASED:
 			if (term.select == 2) {
-				copy(serial);
+				ps_copy(serial);
 				term.select = 3;
 			} else {
 				term.select = 0;
@@ -1058,7 +1153,7 @@ static void ptr_button(void *data, struct wl_pointer *wl_pointer,
 		}
 	} else if (button == 0x112 &&
 		   state == WL_POINTER_BUTTON_STATE_RELEASED) {
-		paste();
+		paste(true);
 	}
 
 	if (term.cursor.current == NULL)
@@ -1135,9 +1230,77 @@ static void seat_name(void *data, struct wl_seat *seat, const char *name)
 {
 }
 
-static struct wl_seat_listener seat_listener = {
+static const struct wl_seat_listener seat_listener = {
 	seat_capabilities,
 	seat_name
+};
+
+static void do_offer(void *d, struct wl_data_offer *o, const char *mime_type)
+{
+	if (strcmp(mime_type, "UTF8_STRING") == 0)
+		term.paste.d_acceptable = true;
+}
+
+static void do_source_actions(void *d, struct wl_data_offer *o, uint32_t sa)
+{
+}
+
+static void do_action(void *d, struct wl_data_offer *o, uint32_t dnd_action)
+{
+}
+
+static const struct wl_data_offer_listener do_listener = {
+	do_offer,
+	do_source_actions,
+	do_action
+};
+
+static void dd_data_offer(void *data, struct wl_data_device *wl_data_device,
+			  struct wl_data_offer *offer)
+{
+	if (term.paste.d_offer)
+		wl_data_offer_destroy(term.paste.d_offer);
+	term.paste.d_offer = offer;
+	term.paste.d_acceptable = false;
+	wl_data_offer_add_listener(offer, &do_listener, NULL);
+}
+
+static void dd_enter(void *data, struct wl_data_device *wl_data_device,
+		     uint32_t serial, struct wl_surface *surface,
+		     wl_fixed_t x, wl_fixed_t y, struct wl_data_offer *id)
+{
+}
+
+static void dd_leave(void *data, struct wl_data_device *wl_data_device)
+{
+}
+
+static void dd_motion(void *data, struct wl_data_device *wl_data_device,
+		      uint32_t time, wl_fixed_t x, wl_fixed_t y)
+{
+}
+
+static void dd_drop(void *data, struct wl_data_device *wl_data_device)
+{
+}
+
+static void dd_selection(void *data, struct wl_data_device *wl_data_device,
+			 struct wl_data_offer *id)
+{
+	if (id == NULL && term.paste.d_offer) {
+		wl_data_offer_destroy(term.paste.d_offer);
+		term.paste.d_offer = NULL;
+		term.paste.d_acceptable = false;
+	}
+}
+
+static const struct wl_data_device_listener dd_listener = {
+	dd_data_offer,
+	dd_enter,
+	dd_leave,
+	dd_motion,
+	dd_drop,
+	dd_selection
 };
 
 static void pso_offer(void *data,
@@ -1145,10 +1308,10 @@ static void pso_offer(void *data,
 		      const char *mime_type)
 {
 	if (strcmp(mime_type, "UTF8_STRING") == 0)
-		term.paste.acceptable = true;
+		term.paste.ps_acceptable = true;
 }
 
-static struct gtk_primary_selection_offer_listener pso_listener = {
+static const struct gtk_primary_selection_offer_listener pso_listener = {
 	pso_offer
 };
 
@@ -1156,10 +1319,10 @@ static void psd_data_offer(void *data,
 			   struct gtk_primary_selection_device *ps_d,
 			   struct gtk_primary_selection_offer *offer)
 {
-	if (term.paste.offer)
-		gtk_primary_selection_offer_destroy(term.paste.offer);
-	term.paste.offer = offer;
-	term.paste.acceptable = false;
+	if (term.paste.ps_offer)
+		gtk_primary_selection_offer_destroy(term.paste.ps_offer);
+	term.paste.ps_offer = offer;
+	term.paste.ps_acceptable = false;
 	gtk_primary_selection_offer_add_listener(offer, &pso_listener, NULL);
 }
 
@@ -1167,14 +1330,14 @@ static void psd_selection(void *data,
 			  struct gtk_primary_selection_device *ps_d,
 			  struct gtk_primary_selection_offer *id)
 {
-	if (id == NULL && term.paste.offer) {
-		gtk_primary_selection_offer_destroy(term.paste.offer);
-		term.paste.offer = NULL;
-		term.paste.acceptable = false;
+	if (id == NULL && term.paste.ps_offer) {
+		gtk_primary_selection_offer_destroy(term.paste.ps_offer);
+		term.paste.ps_offer = NULL;
+		term.paste.ps_acceptable = false;
 	}
 }
 
-static struct gtk_primary_selection_device_listener psd_listener = {
+static const struct gtk_primary_selection_device_listener psd_listener = {
 	psd_data_offer,
 	psd_selection
 };
@@ -1279,6 +1442,9 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "wl_seat") == 0) {
 		term.seat = wl_registry_bind(r, id, &wl_seat_interface, 5);
 		wl_seat_add_listener(term.seat, &seat_listener, NULL);
+	} else if (strcmp(i, "wl_data_device_manager") == 0) {
+		term.d_dm = wl_registry_bind(r, id,
+			&wl_data_device_manager_interface, 2);
 	} else if (strcmp(i, "gtk_primary_selection_device_manager") == 0) {
 		term.ps_dm = wl_registry_bind(r, id,
 			&gtk_primary_selection_device_manager_interface, 1);
@@ -1604,6 +1770,12 @@ retry:
 	if (term.repeat.fd < 0)
 		fail(etimer, "could not create key repeat timer: %m");
 
+	if (term.d_dm && term.seat) {
+		term.d_d = wl_data_device_manager_get_data_device(
+			term.d_dm, term.seat);
+		wl_data_device_add_listener(term.d_d, &dd_listener, NULL);
+	}
+
 	if (term.ps_dm && term.seat) {
 		term.ps_d = gtk_primary_selection_device_manager_get_device(
 			term.ps_dm, term.seat);
@@ -1649,6 +1821,8 @@ retry:
 
 	close(term.repeat.fd);
 etimer:
+	if (term.d_d)
+		wl_data_device_release(term.d_d);
 	if (term.ps_d)
 		gtk_primary_selection_device_destroy(term.ps_d);
 	if (term.ptr)
@@ -1670,6 +1844,8 @@ etsm:
 eglobals:
 	if (term.ps_dm)
 		gtk_primary_selection_device_manager_destroy(term.ps_dm);
+	if (term.d_dm)
+		wl_data_device_manager_destroy(term.d_dm);
 	if (term.seat)
 		wl_seat_destroy(term.seat);
 	if (term.wm_base)
