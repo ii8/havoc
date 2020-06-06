@@ -1486,6 +1486,10 @@ static void qt_touch(void *data,
 
 	if (id == tp1) {
 		if ((state & 0xFFFF) & Qt_TouchPointReleased) {
+			if (tp2) {
+				d_uncopy();
+				d_copy(0);
+			}
 			tp1 = tp2;
 			tp1_grid_x = tp2_grid_x;
 			tp1_grid_y = tp2_grid_y;
@@ -1509,6 +1513,8 @@ static void qt_touch(void *data,
 	} else if (id == tp2) {
 		assert(tp1);
 		if ((state & 0xFFFF) & Qt_TouchPointReleased) {
+			d_uncopy();
+			d_copy(0);
 			tp2 = 0;
 		} else {
 			if (grid_x != tp2_grid_x || grid_y != tp2_grid_y) {
@@ -1578,7 +1584,7 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 		wl_seat_add_listener(term.seat, &seat_listener, NULL);
 	} else if (strcmp(i, "wl_data_device_manager") == 0) {
 		term.d_dm = wl_registry_bind(r, id,
-			&wl_data_device_manager_interface, 2);
+			&wl_data_device_manager_interface, 1);
 	} else if (strcmp(i, "gtk_primary_selection_device_manager") == 0) {
 		term.ps_dm = wl_registry_bind(r, id,
 			&gtk_primary_selection_device_manager_interface, 1);
