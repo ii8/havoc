@@ -1460,7 +1460,7 @@ static const struct wl_registry_listener reg_listener = {
 	registry_loose
 };
 
-void setup_pty(char *argv[])
+static void setup_pty(char *argv[])
 {
 	pid_t pid = forkpty(&term.master_fd, NULL, NULL, NULL);
 
@@ -1573,7 +1573,7 @@ static FILE *open_config(void)
 	}
 
 	dir = getenv("XDG_CONFIG_HOME");
-	if (dir) {
+	if (dir && *dir != '\0') {
 		snprintf(path, sizeof(path), "%s/%s", dir, CONF_FILE);
 		f = fopen(path, "r");
 		if (f)
@@ -1581,7 +1581,7 @@ static FILE *open_config(void)
 	}
 
 	dir = getenv("HOME");
-	if (dir) {
+	if (dir && *dir != '\0') {
 		snprintf(path, sizeof(path), "%s/.config/%s", dir, CONF_FILE);
 		f = fopen(path, "r");
 		if (f)
