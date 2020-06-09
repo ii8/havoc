@@ -125,6 +125,7 @@ struct tsm_screen {
 	struct line **main_lines;	/* real main lines */
 	struct line **alt_lines;	/* real alternative lines */
 	tsm_age_t age;			/* whole screen age */
+	int vanguard;			/* lowest non-empty line on screen */
 
 	/* scroll-back buffer */
 	unsigned int sb_count;		/* number of lines in sb */
