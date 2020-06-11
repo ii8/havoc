@@ -1423,7 +1423,7 @@ static unsigned char *lookup(struct node *n, uint32_t ch)
 	return NULL;
 }
 
-unsigned char *new_glyph(uint32_t id, uint32_t c, unsigned cwidth)
+unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth)
 {
 	struct vertex *vertices;
 	int xmin, ymin;
@@ -1449,7 +1449,7 @@ unsigned char *new_glyph(uint32_t id, uint32_t c, unsigned cwidth)
 	return bm.pixels;
 }
 
-unsigned char *get_glyph(uint32_t id, uint32_t c, unsigned cwidth)
+unsigned char *get_glyph(uint32_t id, uint32_t c, int cwidth)
 {
 	unsigned char *buf = lookup(font.cache, id);
 

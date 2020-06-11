@@ -62,7 +62,7 @@
 #define LLOG_SUBSYSTEM "tsm-selection"
 
 static void selection_set(struct tsm_screen *con, struct selection_pos *sel,
-			  unsigned int x, unsigned int y)
+			  int x, int y)
 {
 	struct line *pos;
 
@@ -95,9 +95,7 @@ void tsm_screen_selection_reset(struct tsm_screen *con)
 }
 
 SHL_EXPORT
-void tsm_screen_selection_start(struct tsm_screen *con,
-				unsigned int posx,
-				unsigned int posy)
+void tsm_screen_selection_start(struct tsm_screen *con, int posx, int posy)
 {
 	if (!con)
 		return;
@@ -112,9 +110,7 @@ void tsm_screen_selection_start(struct tsm_screen *con,
 }
 
 SHL_EXPORT
-void tsm_screen_selection_target(struct tsm_screen *con,
-				 unsigned int posx,
-				 unsigned int posy)
+void tsm_screen_selection_target(struct tsm_screen *con, int posx, int posy)
 {
 	if (!con || !con->sel_active)
 		return;
@@ -129,10 +125,9 @@ void tsm_screen_selection_target(struct tsm_screen *con,
 /* TODO: tsm_ucs4_to_utf8 expects UCS4 characters, but a cell contains a
  * tsm-symbol (which can contain multiple UCS4 chars). Fix this when introducing
  * support for combining characters. */
-static unsigned int copy_line(struct line *line, char *buf,
-			      unsigned int start, unsigned int len)
+static int copy_line(struct line *line, char *buf, int start, size_t len)
 {
-	unsigned int i, end;
+	int i, end;
 	char *pos = buf;
 
 	end = start + len;
@@ -149,7 +144,8 @@ static unsigned int copy_line(struct line *line, char *buf,
 SHL_EXPORT
 int tsm_screen_selection_copy(struct tsm_screen *con, char **out)
 {
-	unsigned int len, i;
+	int i;
+	size_t len;
 	struct selection_pos *start, *end;
 	struct line *iter;
 	char *str, *pos;

@@ -69,7 +69,7 @@
 
 static struct cell *get_cursor_cell(struct tsm_screen *con)
 {
-	unsigned int cur_x, cur_y;
+	int cur_x, cur_y;
 
 	cur_x = con->cursor_x;
 	if (cur_x >= con->size_x)
@@ -82,7 +82,7 @@ static struct cell *get_cursor_cell(struct tsm_screen *con)
 	return &con->lines[cur_y]->cells[cur_x];
 }
 
-static void move_cursor(struct tsm_screen *con, unsigned int x, unsigned int y)
+static void move_cursor(struct tsm_screen *con, int x, int y)
 {
 	struct cell *c;
 
@@ -118,11 +118,10 @@ void screen_cell_init(struct tsm_screen *con, struct cell *cell)
 	memcpy(&cell->attr, &con->def_attr, sizeof(cell->attr));
 }
 
-static int line_new(struct tsm_screen *con, struct line **out,
-		    unsigned int width)
+static int line_new(struct tsm_screen *con, struct line **out, int width)
 {
 	struct line *line;
-	unsigned int i;
+	int i;
 
 	if (!width)
 		return -EINVAL;
@@ -154,8 +153,7 @@ static void line_free(struct line *line)
 	free(line);
 }
 
-static int line_resize(struct tsm_screen *con, struct line *line,
-		       unsigned int width)
+static int line_resize(struct tsm_screen *con, struct line *line, int width)
 {
 	struct cell *tmp;
 
@@ -255,9 +253,9 @@ static void link_to_scrollback(struct tsm_screen *con, struct line *line)
 	++con->sb_count;
 }
 
-static void screen_scroll_up(struct tsm_screen *con, unsigned int num)
+static void screen_scroll_up(struct tsm_screen *con, int num)
 {
-	unsigned int i, j, max, pos;
+	int i, j, max, pos;
 	int ret;
 
 	if (!num)
@@ -331,9 +329,9 @@ static void screen_scroll_up(struct tsm_screen *con, unsigned int num)
 	}
 }
 
-static void screen_scroll_down(struct tsm_screen *con, unsigned int num)
+static void screen_scroll_down(struct tsm_screen *con, int num)
 {
-	unsigned int i, j, max;
+	int i, j, max;
 
 	if (!num)
 		return;
@@ -378,12 +376,11 @@ static void screen_scroll_down(struct tsm_screen *con, unsigned int num)
 	}
 }
 
-static void screen_write(struct tsm_screen *con, unsigned int x,
-			  unsigned int y, tsm_symbol_t ch, unsigned int len,
-			  const struct tsm_screen_attr *attr)
+static void screen_write(struct tsm_screen *con, int x, int y, tsm_symbol_t ch,
+			 int len, const struct tsm_screen_attr *attr)
 {
 	struct line *line;
-	unsigned int i;
+	int i;
 
 	if (!len)
 		return;
@@ -395,8 +392,7 @@ static void screen_write(struct tsm_screen *con, unsigned int x,
 
 	line = con->lines[y];
 
-	if ((con->flags & TSM_SCREEN_INSERT_MODE) &&
-	    (int)x < ((int)con->size_x - len)) {
+	if (con->flags & TSM_SCREEN_INSERT_MODE && x < con->size_x - len) {
 		line->age = con->age_cnt;
 		memmove(&line->cells[x + len], &line->cells[x],
 			sizeof(struct cell) * (con->size_x - len - x));
@@ -417,13 +413,11 @@ static void screen_write(struct tsm_screen *con, unsigned int x,
 }
 
 static void screen_erase_region(struct tsm_screen *con,
-				 unsigned int x_from,
-				 unsigned int y_from,
-				 unsigned int x_to,
-				 unsigned int y_to,
-				 bool protect)
+				int x_from, int y_from,
+				int x_to, int y_to,
+				bool protect)
 {
-	unsigned int to;
+	int to;
 	struct line *line;
 
 	/* TODO: more sophisticated ageing */
@@ -455,12 +449,12 @@ static void screen_erase_region(struct tsm_screen *con,
 	}
 }
 
-static inline unsigned int to_abs_x(struct tsm_screen *con, unsigned int x)
+static inline int to_abs_x(struct tsm_screen *con, int x)
 {
 	return x;
 }
 
-static inline unsigned int to_abs_y(struct tsm_screen *con, unsigned int y)
+static inline int to_abs_y(struct tsm_screen *con, int y)
 {
 	if (!(con->flags & TSM_SCREEN_REL_ORIGIN))
 		return y;
@@ -473,7 +467,7 @@ int tsm_screen_new(struct tsm_screen **out)
 {
 	struct tsm_screen *con;
 	int ret;
-	unsigned int i;
+	int i;
 
 	if (!out)
 		return -EINVAL;
@@ -527,7 +521,7 @@ void tsm_screen_ref(struct tsm_screen *con)
 SHL_EXPORT
 void tsm_screen_unref(struct tsm_screen *con)
 {
-	unsigned int i;
+	int i;
 
 	if (!con || !con->ref || --con->ref)
 		return;
@@ -568,7 +562,7 @@ unsigned int tsm_screen_get_opts(struct tsm_screen *scr)
 }
 
 SHL_EXPORT
-unsigned int tsm_screen_get_width(struct tsm_screen *con)
+int tsm_screen_get_width(struct tsm_screen *con)
 {
 	if (!con)
 		return 0;
@@ -577,7 +571,7 @@ unsigned int tsm_screen_get_width(struct tsm_screen *con)
 }
 
 SHL_EXPORT
-unsigned int tsm_screen_get_height(struct tsm_screen *con)
+int tsm_screen_get_height(struct tsm_screen *con)
 {
 	if (!con)
 		return 0;
@@ -586,12 +580,10 @@ unsigned int tsm_screen_get_height(struct tsm_screen *con)
 }
 
 SHL_EXPORT
-int tsm_screen_resize(struct tsm_screen *con, unsigned int x,
-		      unsigned int y)
+int tsm_screen_resize(struct tsm_screen *con, int x, int y)
 {
 	struct line **cache;
-	unsigned int i, j, width, start;
-	int diff;
+	int i, j, width, diff, start;
 	int ret;
 	bool *tab_ruler;
 
@@ -717,7 +709,7 @@ int tsm_screen_resize(struct tsm_screen *con, unsigned int x,
 		move_cursor(con, con->size_x - 1, con->cursor_y);
 
 	/* scroll buffer if screen height shrinks */
-	diff = ((int)con->size_y - (int)y) - ((int)con->size_y - (con->vanguard + 1));
+	diff = (con->size_y - y) - (con->size_y - (con->vanguard + 1));
 	if (diff > 0) {
 		screen_scroll_up(con, diff);
 		if (con->cursor_y > diff)
@@ -735,10 +727,9 @@ int tsm_screen_resize(struct tsm_screen *con, unsigned int x,
 }
 
 SHL_EXPORT
-int tsm_screen_set_margins(struct tsm_screen *con,
-			       unsigned int top, unsigned int bottom)
+int tsm_screen_set_margins(struct tsm_screen *con, int top, int bottom)
 {
-	unsigned int upper, lower;
+	int upper, lower;
 
 	if (!con)
 		return -EINVAL;
@@ -764,8 +755,7 @@ int tsm_screen_set_margins(struct tsm_screen *con,
 
 /* set maximum scrollback buffer size */
 SHL_EXPORT
-void tsm_screen_set_max_sb(struct tsm_screen *con,
-			       unsigned int max)
+void tsm_screen_set_max_sb(struct tsm_screen *con, int max)
 {
 	struct line *line;
 
@@ -843,7 +833,7 @@ void tsm_screen_clear_sb(struct tsm_screen *con)
 }
 
 SHL_EXPORT
-void tsm_screen_sb_up(struct tsm_screen *con, unsigned int num)
+void tsm_screen_sb_up(struct tsm_screen *con, int num)
 {
 	if (!con || !num)
 		return;
@@ -867,7 +857,7 @@ void tsm_screen_sb_up(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_sb_down(struct tsm_screen *con, unsigned int num)
+void tsm_screen_sb_down(struct tsm_screen *con, int num)
 {
 	if (!con || !num)
 		return;
@@ -885,7 +875,7 @@ void tsm_screen_sb_down(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_sb_page_up(struct tsm_screen *con, unsigned int num)
+void tsm_screen_sb_page_up(struct tsm_screen *con, int num)
 {
 	if (!con || !num)
 		return;
@@ -895,7 +885,7 @@ void tsm_screen_sb_page_up(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_sb_page_down(struct tsm_screen *con, unsigned int num)
+void tsm_screen_sb_page_down(struct tsm_screen *con, int num)
 {
 	if (!con || !num)
 		return;
@@ -930,7 +920,7 @@ void tsm_screen_set_def_attr(struct tsm_screen *con,
 SHL_EXPORT
 void tsm_screen_reset(struct tsm_screen *con)
 {
-	unsigned int i;
+	int i;
 
 	if (!con)
 		return;
@@ -1019,7 +1009,7 @@ unsigned int tsm_screen_get_flags(struct tsm_screen *con)
 }
 
 SHL_EXPORT
-unsigned int tsm_screen_get_cursor_x(struct tsm_screen *con)
+int tsm_screen_get_cursor_x(struct tsm_screen *con)
 {
 	if (!con)
 		return 0;
@@ -1028,7 +1018,7 @@ unsigned int tsm_screen_get_cursor_x(struct tsm_screen *con)
 }
 
 SHL_EXPORT
-unsigned int tsm_screen_get_cursor_y(struct tsm_screen *con)
+int tsm_screen_get_cursor_y(struct tsm_screen *con)
 {
 	if (!con)
 		return 0;
@@ -1057,7 +1047,7 @@ void tsm_screen_reset_tabstop(struct tsm_screen *con)
 SHL_EXPORT
 void tsm_screen_reset_all_tabstops(struct tsm_screen *con)
 {
-	unsigned int i;
+	int i;
 
 	if (!con)
 		return;
@@ -1068,9 +1058,9 @@ void tsm_screen_reset_all_tabstops(struct tsm_screen *con)
 
 SHL_EXPORT
 void tsm_screen_write(struct tsm_screen *con, tsm_symbol_t ch,
-			  const struct tsm_screen_attr *attr)
+		      const struct tsm_screen_attr *attr)
 {
-	unsigned int last;
+	int last;
 	int len;
 
 	if (!con)
@@ -1121,7 +1111,7 @@ void tsm_screen_newline(struct tsm_screen *con)
 }
 
 SHL_EXPORT
-void tsm_screen_scroll_up(struct tsm_screen *con, unsigned int num)
+void tsm_screen_scroll_up(struct tsm_screen *con, int num)
 {
 	if (!con || !num)
 		return;
@@ -1132,7 +1122,7 @@ void tsm_screen_scroll_up(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_scroll_down(struct tsm_screen *con, unsigned int num)
+void tsm_screen_scroll_down(struct tsm_screen *con, int num)
 {
 	if (!con || !num)
 		return;
@@ -1143,10 +1133,9 @@ void tsm_screen_scroll_down(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_move_to(struct tsm_screen *con, unsigned int x,
-			    unsigned int y)
+void tsm_screen_move_to(struct tsm_screen *con, int x, int y)
 {
-	unsigned int last;
+	int last;
 
 	if (!con)
 		return;
@@ -1170,10 +1159,9 @@ void tsm_screen_move_to(struct tsm_screen *con, unsigned int x,
 }
 
 SHL_EXPORT
-void tsm_screen_move_up(struct tsm_screen *con, unsigned int num,
-			    bool scroll)
+void tsm_screen_move_up(struct tsm_screen *con, int num, bool scroll)
 {
-	unsigned int diff, size;
+	int diff, size;
 
 	if (!con || !num)
 		return;
@@ -1197,10 +1185,9 @@ void tsm_screen_move_up(struct tsm_screen *con, unsigned int num,
 }
 
 SHL_EXPORT
-void tsm_screen_move_down(struct tsm_screen *con, unsigned int num,
-			      bool scroll)
+void tsm_screen_move_down(struct tsm_screen *con, int num, bool scroll)
 {
-	unsigned int diff, size;
+	int diff, size;
 
 	if (!con || !num)
 		return;
@@ -1224,9 +1211,9 @@ void tsm_screen_move_down(struct tsm_screen *con, unsigned int num,
 }
 
 SHL_EXPORT
-void tsm_screen_move_left(struct tsm_screen *con, unsigned int num)
+void tsm_screen_move_left(struct tsm_screen *con, int num)
 {
-	unsigned int x;
+	int x;
 
 	if (!con || !num)
 		return;
@@ -1247,7 +1234,7 @@ void tsm_screen_move_left(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_move_right(struct tsm_screen *con, unsigned int num)
+void tsm_screen_move_right(struct tsm_screen *con, int num)
 {
 	if (!con || !num)
 		return;
@@ -1286,9 +1273,9 @@ void tsm_screen_move_line_home(struct tsm_screen *con)
 }
 
 SHL_EXPORT
-void tsm_screen_tab_right(struct tsm_screen *con, unsigned int num)
+void tsm_screen_tab_right(struct tsm_screen *con, int num)
 {
-	unsigned int i, j, x;
+	int i, j, x;
 
 	if (!con || !num)
 		return;
@@ -1315,10 +1302,9 @@ void tsm_screen_tab_right(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_tab_left(struct tsm_screen *con, unsigned int num)
+void tsm_screen_tab_left(struct tsm_screen *con, int num)
 {
-	unsigned int i, x;
-	int j;
+	int i, j, x;
 
 	if (!con || !num)
 		return;
@@ -1343,9 +1329,9 @@ void tsm_screen_tab_left(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_insert_lines(struct tsm_screen *con, unsigned int num)
+void tsm_screen_insert_lines(struct tsm_screen *con, int num)
 {
-	unsigned int i, j, max;
+	int i, j, max;
 
 	if (!con || !num)
 		return;
@@ -1385,9 +1371,9 @@ void tsm_screen_insert_lines(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_delete_lines(struct tsm_screen *con, unsigned int num)
+void tsm_screen_delete_lines(struct tsm_screen *con, int num)
 {
-	unsigned int i, j, max;
+	int i, j, max;
 
 	if (!con || !num)
 		return;
@@ -1427,10 +1413,10 @@ void tsm_screen_delete_lines(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_insert_chars(struct tsm_screen *con, unsigned int num)
+void tsm_screen_insert_chars(struct tsm_screen *con, int num)
 {
 	struct cell *cells;
-	unsigned int max, mv, i;
+	int max, mv, i;
 
 	if (!con || !num || !con->size_y || !con->size_x)
 		return;
@@ -1460,10 +1446,10 @@ void tsm_screen_insert_chars(struct tsm_screen *con, unsigned int num)
 }
 
 SHL_EXPORT
-void tsm_screen_delete_chars(struct tsm_screen *con, unsigned int num)
+void tsm_screen_delete_chars(struct tsm_screen *con, int num)
 {
 	struct cell *cells;
-	unsigned int max, mv, i;
+	int max, mv, i;
 
 	if (!con || !num || !con->size_y || !con->size_x)
 		return;
@@ -1495,7 +1481,7 @@ void tsm_screen_delete_chars(struct tsm_screen *con, unsigned int num)
 SHL_EXPORT
 void tsm_screen_erase_cursor(struct tsm_screen *con)
 {
-	unsigned int x;
+	int x;
 
 	if (!con)
 		return;
@@ -1511,9 +1497,9 @@ void tsm_screen_erase_cursor(struct tsm_screen *con)
 }
 
 SHL_EXPORT
-void tsm_screen_erase_chars(struct tsm_screen *con, unsigned int num)
+void tsm_screen_erase_chars(struct tsm_screen *con, int num)
 {
-	unsigned int x;
+	int x;
 
 	if (!con || !num)
 		return;
@@ -1526,14 +1512,13 @@ void tsm_screen_erase_chars(struct tsm_screen *con, unsigned int num)
 		x = con->cursor_x;
 
 	screen_erase_region(con, x, con->cursor_y, x + num - 1, con->cursor_y,
-			     false);
+			    false);
 }
 
 SHL_EXPORT
-void tsm_screen_erase_cursor_to_end(struct tsm_screen *con,
-				        bool protect)
+void tsm_screen_erase_cursor_to_end(struct tsm_screen *con, bool protect)
 {
-	unsigned int x;
+	int x;
 
 	if (!con)
 		return;
@@ -1546,12 +1531,11 @@ void tsm_screen_erase_cursor_to_end(struct tsm_screen *con,
 		x = con->cursor_x;
 
 	screen_erase_region(con, x, con->cursor_y, con->size_x - 1,
-			     con->cursor_y, protect);
+			    con->cursor_y, protect);
 }
 
 SHL_EXPORT
-void tsm_screen_erase_home_to_cursor(struct tsm_screen *con,
-					 bool protect)
+void tsm_screen_erase_home_to_cursor(struct tsm_screen *con, bool protect)
 {
 	if (!con)
 		return;
@@ -1559,12 +1543,11 @@ void tsm_screen_erase_home_to_cursor(struct tsm_screen *con,
 	screen_inc_age(con);
 
 	screen_erase_region(con, 0, con->cursor_y, con->cursor_x,
-			     con->cursor_y, protect);
+			    con->cursor_y, protect);
 }
 
 SHL_EXPORT
-void tsm_screen_erase_current_line(struct tsm_screen *con,
-				       bool protect)
+void tsm_screen_erase_current_line(struct tsm_screen *con, bool protect)
 {
 	if (!con)
 		return;
@@ -1572,14 +1555,13 @@ void tsm_screen_erase_current_line(struct tsm_screen *con,
 	screen_inc_age(con);
 
 	screen_erase_region(con, 0, con->cursor_y, con->size_x - 1,
-			     con->cursor_y, protect);
+			    con->cursor_y, protect);
 	if (con->cursor_y == con->vanguard)
 		con->vanguard--;
 }
 
 SHL_EXPORT
-void tsm_screen_erase_screen_to_cursor(struct tsm_screen *con,
-					   bool protect)
+void tsm_screen_erase_screen_to_cursor(struct tsm_screen *con, bool protect)
 {
 	if (!con)
 		return;
@@ -1592,10 +1574,9 @@ void tsm_screen_erase_screen_to_cursor(struct tsm_screen *con,
 }
 
 SHL_EXPORT
-void tsm_screen_erase_cursor_to_screen(struct tsm_screen *con,
-					   bool protect)
+void tsm_screen_erase_cursor_to_screen(struct tsm_screen *con, bool protect)
 {
-	unsigned int x;
+	int x;
 
 	if (!con)
 		return;

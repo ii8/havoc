@@ -138,8 +138,8 @@ enum parser_action {
 #define ENDPASTE "\e[201~"
 
 struct vte_saved_state {
-	unsigned int cursor_x;
-	unsigned int cursor_y;
+	int cursor_x;
+	int cursor_y;
 	struct tsm_screen_attr cattr;
 	tsm_vte_charset **gl;
 	tsm_vte_charset **gr;
@@ -159,7 +159,7 @@ struct tsm_vte {
 
 	unsigned int state;
 	tsm_symbol_t last_sym;
-	unsigned int csi_argc;
+	int csi_argc;
 	int csi_argv[CSI_ARG_MAX];
 	unsigned int csi_flags;
 
@@ -178,8 +178,8 @@ struct tsm_vte {
 	tsm_vte_charset *g3;
 
 	struct vte_saved_state saved_state;
-	unsigned int alt_cursor_x;
-	unsigned int alt_cursor_y;
+	int alt_cursor_x;
+	int alt_cursor_y;
 
 	bool pasting;
 	int endpaste_i;
@@ -955,7 +955,7 @@ static void do_esc(struct tsm_vte *vte, uint32_t data)
 static void csi_attribute(struct tsm_vte *vte)
 {
 	static const uint8_t bval[6] = { 0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff };
-	unsigned int i, code, val;
+	int i, code, val;
 	uint8_t cr, cg, cb;
 
 	if (vte->csi_argc <= 1 && vte->csi_argv[0] == -1) {
@@ -1227,7 +1227,7 @@ static inline void set_reset_flag(struct tsm_vte *vte, bool set,
 
 static void csi_mode(struct tsm_vte *vte, bool set)
 {
-	unsigned int i;
+	int i;
 
 	for (i = 0; i < vte->csi_argc; ++i) {
 		if (!(vte->csi_flags & CSI_WHAT)) {
@@ -1440,7 +1440,8 @@ static void csi_dev_attr(struct tsm_vte *vte)
 static void csi_dsr(struct tsm_vte *vte)
 {
 	char buf[64];
-	unsigned int x, y, len;
+	int x, y;
+	unsigned int len;
 
 	if (vte->csi_argv[0] == 5) {
 		vte_write(vte, "\e[0n", 4);

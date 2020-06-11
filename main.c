@@ -26,7 +26,7 @@
 
 int font_init(int, char *, int *, int *);
 void font_deinit(void);
-unsigned char *get_glyph(uint32_t, uint32_t, unsigned);
+unsigned char *get_glyph(uint32_t, uint32_t, int);
 
 static struct {
 	bool die;
@@ -52,7 +52,7 @@ static struct {
 	struct buffer {
 		struct wl_buffer *b;
 		void *data;
-		size_t size;
+		int size;
 		bool busy;
 		tsm_age_t age;
 	} buf[2];
@@ -60,10 +60,10 @@ static struct {
 
 	int col, row;
 	int cwidth, cheight;
-	size_t width, height;
-	size_t confheight, confwidth;
+	int width, height;
+	int confwidth, confheight;
 	struct {
-		size_t top, left;
+		int top, left;
 	} margin;
 
 	struct tsm_screen *screen;
@@ -138,7 +138,7 @@ static struct {
 	struct {
 		char shell[32];
 		int col, row;
-		unsigned scrollback;
+		int scrollback;
 		bool margin;
 		unsigned char opacity;
 		int font_size;
@@ -560,10 +560,9 @@ static struct buffer *swap_buffers(void)
 
 typedef uint_fast8_t uf8;
 
-static void blank(uint32_t *dst, unsigned w,
-		  uf8 br, uf8 bg, uf8 bb, uf8 ba)
+static void blank(uint32_t *dst, int w, uf8 br, uf8 bg, uf8 bb, uf8 ba)
 {
-	unsigned i;
+	int i;
 	uint32_t b;
 	int h = term.cheight;
 
@@ -577,12 +576,12 @@ static void blank(uint32_t *dst, unsigned w,
 	}
 }
 
-static void print(uint32_t *dst, unsigned w,
+static void print(uint32_t *dst, int w,
 		  uf8 br, uf8 bg, uf8 bb,
 		  uf8 fr, uf8 fg, uf8 fb,
 		  uf8 ba, unsigned char *glyph)
 {
-	unsigned i;
+	int i;
 	int h = term.cheight;
 
 	w *= term.cwidth;
@@ -612,7 +611,7 @@ static void print(uint32_t *dst, unsigned w,
 }
 
 static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
-		     size_t len, unsigned char_width, unsigned x, unsigned y,
+		     size_t len, int char_width, int x, int y,
 		     const struct tsm_screen_attr *a, tsm_age_t age,
 		     void *data)
 {
@@ -657,9 +656,9 @@ static void draw_margin(struct buffer *buffer)
 	uint8_t a = term.cfg.opacity;
 	uint8_t *rgb = term.cfg.colors[TSM_COLOR_BACKGROUND];
 	uint32_t c = join(a, mul(rgb[0], a), mul(rgb[1], a), mul(rgb[2], a));
-	size_t inw = term.col * term.cwidth;
-	size_t inh = term.row * term.cheight;
-	size_t i, j;
+	int inw = term.col * term.cwidth;
+	int inh = term.row * term.cheight;
+	int i, j;
 
 	for (i = 0; i < term.width * term.margin.top; ++i)
 		dst[i] = c;
@@ -1083,12 +1082,12 @@ static void ps_uncopy(void)
 	pss_cancelled(NULL, term.ps_copy.source);
 }
 
-static inline unsigned grid_x(void)
+static inline int grid_x(void)
 {
 	return (wl_fixed_to_double(term.ptr_x) - term.margin.left) / term.cwidth;
 }
 
-static inline unsigned grid_y(void)
+static inline int grid_y(void)
 {
 	return (wl_fixed_to_double(term.ptr_y) - term.margin.top) / term.cheight;
 }
@@ -1489,11 +1488,12 @@ static void setup_pty(char *argv[])
 
 #define CONF_FILE "havoc.cfg"
 
-static long cfg_num(const char *nptr, int base, long min, long max)
+static long long cfg_num(const char *nptr, int base,
+			 long long min, long long max)
 {
-	long n;
+	long long n;
 
-	n = strtol(nptr, NULL, base);
+	n = strtoll(nptr, NULL, base);
 	return n < min ? min : n > max ? max : n;
 }
 
@@ -1518,7 +1518,7 @@ static void terminal_config(char *key, char *val)
 	else if (strcmp(key, "columns") == 0)
 		term.cfg.col = cfg_num(val, 10, 1, 1000);
 	else if (strcmp(key, "scrollback") == 0)
-		term.cfg.scrollback = cfg_num(val, 10, 0, UINT_MAX);
+		term.cfg.scrollback = cfg_num(val, 10, 0, INT_MAX);
 }
 
 static void font_config(char *key, char *val)
