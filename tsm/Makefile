@@ -1,5 +1,4 @@
-
-CFLAGS=-Wall -Wextra -Wno-unused-parameter -Wno-parentheses -Wno-sign-compare
+CFLAGS ?= -Wall -Wextra -Wno-unused-parameter -Wno-parentheses -Wno-sign-compare
 
 OBJ=wcwidth.o shl-htable.o\
 	tsm-render.o tsm-screen.o tsm-selection.o\

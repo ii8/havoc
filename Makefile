@@ -1,14 +1,12 @@
+WAYLAND_PROTOCOLS_DIR != pkg-config --variable=pkgdatadir wayland-protocols
+WAYLAND_SCANNER := wayland-scanner
 
-SCANNER     := wayland-scanner
-PROTDATADIR != pkg-config --variable=datarootdir wayland-protocols
-PROTDIR     := $(PROTDATADIR)/wayland-protocols
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
 
-PREFIX=/usr/local
-BINDIR=$(PREFIX)/bin
+CFLAGS ?= -Wall -Wextra -Wno-unused-parameter -Wno-parentheses
 
-CFLAGS=-Wall -Wextra -Wno-unused-parameter -Wno-parentheses
-
-VPATH=$(PROTDIR)/stable/xdg-shell
+VPATH=$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell
 LIBS=-lrt -lm -lutil -lwayland-client -lwayland-cursor -lxkbcommon -Ltsm -lhtsm
 OBJ=xdg-shell.o gtk-primary-selection.o glyph.o main.o
 GEN=xdg-shell.c xdg-shell.h gtk-primary-selection.c gtk-primary-selection.h
@@ -29,12 +27,12 @@ clean:
 $(OBJ): $(GEN)
 
 %.c: %.xml
-	$(SCANNER) private-code < $< > $@
+	$(WAYLAND_SCANNER) private-code < $< > $@
 
 %.h: %.xml
-	$(SCANNER) client-header < $< > $@
+	$(WAYLAND_SCANNER) client-header < $< > $@
 
 tsm:
 	$(MAKE) -C $@
 
-.PHONY: install clean tsm uninstall
+.PHONY: install uninstall clean tsm
