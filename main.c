@@ -132,6 +132,7 @@ static struct {
 		bool linger;
 		char *config;
 		char *display;
+		char *directory;
 	} opt;
 
 	struct {
@@ -1469,6 +1470,12 @@ static void setup_pty(char *argv[])
 		exit(EXIT_FAILURE);
 	} else if (pid == 0) {
 		char *prog;
+		if (term.opt.directory) {
+			if (chdir(term.opt.directory) == -1) {
+				fprintf(stderr, "could change directory to %s\n", term.opt.directory);
+				exit(EXIT_FAILURE);
+			}
+		}
 		setenv("TERM", "xterm-256color", 1);
 		if (*argv) {
 			execvp(*argv, argv);
@@ -1668,6 +1675,7 @@ static void usage(void)
 			     " Use empty string for defaults.\n"
 	       "  -l         Keep window open after the child process exits.\n"
 	       "  -s <name>  Wayland display server to connect to.\n"
+	       "  -d <path>  Change to directory.\n"
 	       "  -h         Show this help.\n");
 	exit(EXIT_SUCCESS);
 }
@@ -1694,6 +1702,9 @@ retry:
 			break;
 		case 's':
 			term.opt.display = take("display name or socket");
+			break;
+		case 'd':
+			term.opt.directory = take("current directory path");
 			break;
 		case 'h':
 			usage();
