@@ -132,6 +132,7 @@ static struct {
 		bool linger;
 		char *config;
 		char *display;
+		char *app_id;
 	} opt;
 
 	struct {
@@ -172,7 +173,8 @@ static struct {
 		[TSM_COLOR_WHITE]         = { 255, 255, 255 },
 		[TSM_COLOR_FOREGROUND]    = { 229, 229, 229 },
 		[TSM_COLOR_BACKGROUND]    = {   0,   0,   0 },
-	}
+	},
+	.opt.app_id = "havoc"
 };
 
 static void wcb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
@@ -1668,6 +1670,7 @@ static void usage(void)
 			     " Use empty string for defaults.\n"
 	       "  -l         Keep window open after the child process exits.\n"
 	       "  -s <name>  Wayland display server to connect to.\n"
+	       "  -i <name>  Wayland app id.\n"
 	       "  -h         Show this help.\n");
 	exit(EXIT_SUCCESS);
 }
@@ -1694,6 +1697,9 @@ retry:
 			break;
 		case 's':
 			term.opt.display = take("display name or socket");
+			break;
+		case 'i':
+			term.opt.app_id = take("wayland app id");
 			break;
 		case 'h':
 			usage();
@@ -1761,6 +1767,7 @@ retry:
 		fail(etoplvl, "could not create xdg_toplevel");
 	xdg_toplevel_add_listener(term.toplvl, &toplvl_listener, NULL);
 	xdg_toplevel_set_title(term.toplvl, "havoc");
+	xdg_toplevel_set_app_id(term.toplvl, term.opt.app_id);
 
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
