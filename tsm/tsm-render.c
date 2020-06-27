@@ -57,9 +57,6 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 	bool was_sel = false;
 	tsm_age_t age;
 
-	if (!con || !draw_cb)
-		return 0;
-
 	screen_cell_init(con, &empty);
 
 	cur_x = con->cursor_x;

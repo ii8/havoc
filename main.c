@@ -24,6 +24,8 @@
 #include "xdg-shell.h"
 #include "gtk-primary-selection.h"
 
+#define ARRAY_LENGTH(a) (sizeof (a) / sizeof (a)[0])
+
 int font_init(int, char *, int *, int *);
 void font_deinit(void);
 unsigned char *get_glyph(uint32_t, uint32_t, int);
@@ -68,7 +70,7 @@ static struct {
 
 	struct tsm_screen *screen;
 	struct tsm_vte *vte;
-	enum tsm_vte_modifier mods;
+	unsigned int mods;
 
 	struct xkb_context *xkb_ctx;
 	struct xkb_state *xkb_state;
@@ -98,6 +100,7 @@ static struct {
 		uint32_t key;
 		xkb_keysym_t sym;
 		uint32_t unicode;
+		void (*action)(void);
 		struct itimerspec its;
 	} repeat;
 
@@ -134,6 +137,13 @@ static struct {
 		char *display;
 		char *app_id;
 	} opt;
+
+	struct binding {
+		struct binding *next;
+		unsigned int mods;
+		xkb_keysym_t sym;
+		void (*action)(void);
+	} *binding;
 
 	struct {
 		char shell[32];
@@ -228,6 +238,11 @@ static void handle_repeat(int ev)
 
 	if (read(term.repeat.fd, &exp, sizeof exp) < 0)
 		return;
+
+	if (term.repeat.action) {
+		term.repeat.action();
+		return;
+	}
 
 	tsm_vte_handle_keyboard(term.vte, term.repeat.sym, XKB_KEY_NoSymbol,
 				term.mods, term.repeat.unicode);
@@ -750,6 +765,11 @@ static void paste(bool primary)
 	tsm_vte_paste_begin(term.vte);
 }
 
+static void action_paste(void)
+{
+	paste(false);
+}
+
 static void ds_target(void *d, struct wl_data_source *ds, const char *mt)
 {
 }
@@ -794,12 +814,14 @@ static void d_copy(uint32_t serial)
 	if (!term.d_dm)
 		return;
 
+	if (tsm_screen_selection_copy(term.screen, &term.d_copy.data) < 0)
+		return;
+
 	term.d_copy.source =
 		wl_data_device_manager_create_data_source(term.d_dm);
 	wl_data_source_offer(term.d_copy.source, "UTF8_STRING");
 	wl_data_source_add_listener(term.d_copy.source, &ds_listener, NULL);
 	wl_data_device_set_selection(term.d_d, term.d_copy.source, serial);
-	tsm_screen_selection_copy(term.screen, &term.d_copy.data);
 }
 
 static void d_uncopy(void)
@@ -811,6 +833,14 @@ static void d_uncopy(void)
 		return;
 
 	ds_cancelled(NULL, term.d_copy.source);
+}
+
+static uint32_t action_copy_serial;
+static void action_copy(void)
+{
+	d_uncopy();
+	if (term.select == 3)
+		d_copy(action_copy_serial);
 }
 
 static void reset_repeat(void)
@@ -940,8 +970,10 @@ static xkb_keysym_t compose(xkb_keysym_t sym)
 static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		    uint32_t time, uint32_t key, uint32_t state)
 {
-	xkb_keysym_t sym;
+	xkb_keysym_t sym, lsym;
 	uint32_t unicode;
+	struct binding *b;
+	void (*action)(void) = NULL;
 
 	if (!term.xkb_keymap || !term.xkb_state)
 		return;
@@ -960,27 +992,27 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 	if (unicode == 0)
 		unicode = TSM_VTE_INVALID;
 
-	if (term.mods == (TSM_CONTROL_MASK | TSM_SHIFT_MASK)) {
-		switch (sym) {
-		case XKB_KEY_c:
-		case XKB_KEY_C:
-			d_uncopy();
-			d_copy(serial);
-			return;
-		case XKB_KEY_v:
-		case XKB_KEY_V:
-			paste(false);
-			return;
+	lsym = xkb_keysym_to_lower(sym);
+	action_copy_serial = serial;
+	b = term.binding;
+	while (b) {
+		if (term.mods == b->mods && lsym == b->sym) {
+			b->action();
+			action = b->action;
+			break;
 		}
+		b = b->next;
 	}
 
-	tsm_vte_handle_keyboard(term.vte, sym, XKB_KEY_NoSymbol,
-				term.mods, unicode);
+	if (!action)
+		tsm_vte_handle_keyboard(term.vte, sym, XKB_KEY_NoSymbol,
+					term.mods, unicode);
 
 	if (xkb_keymap_key_repeats(term.xkb_keymap, key + 8)) {
 		term.repeat.key = key;
 		term.repeat.sym = sym;
 		term.repeat.unicode = unicode;
+		term.repeat.action = action;
 		timerfd_settime(term.repeat.fd, 0, &term.repeat.its, NULL);
 	}
 }
@@ -1060,6 +1092,9 @@ static void ps_copy(uint32_t serial)
 	if (!term.ps_dm)
 		return;
 
+	if (tsm_screen_selection_copy(term.screen, &term.ps_copy.data) < 0)
+		return;
+
 	term.ps_copy.source =
 		gtk_primary_selection_device_manager_create_source(term.ps_dm);
 	gtk_primary_selection_source_offer(term.ps_copy.source, "UTF8_STRING");
@@ -1068,7 +1103,6 @@ static void ps_copy(uint32_t serial)
 	gtk_primary_selection_device_set_selection(term.ps_d,
 						   term.ps_copy.source,
 						   serial);
-	tsm_screen_selection_copy(term.screen, &term.ps_copy.data);
 }
 
 static void ps_uncopy(void)
@@ -1485,6 +1519,69 @@ static void setup_pty(char *argv[])
 	fcntl(term.master_fd, F_SETFL, O_NONBLOCK);
 }
 
+static void action_reset(void)
+{
+	tsm_vte_reset(term.vte);
+}
+
+static void action_hard_reset(void)
+{
+	tsm_vte_hard_reset(term.vte);
+	term.need_redraw = true;
+}
+
+static void action_scroll_up(void)
+{
+	tsm_screen_sb_up(term.screen, 1);
+	term.need_redraw = true;
+}
+
+static void action_scroll_down(void)
+{
+	tsm_screen_sb_down(term.screen, 1);
+	term.need_redraw = true;
+}
+
+static void action_scroll_up_page(void)
+{
+	tsm_screen_sb_page_up(term.screen, 1);
+	term.need_redraw = true;
+}
+
+static void action_scroll_down_page(void)
+{
+	tsm_screen_sb_page_down(term.screen, 1);
+	term.need_redraw = true;
+}
+
+static void action_scroll_to_top(void)
+{
+	tsm_screen_sb_up(term.screen, term.cfg.scrollback);
+	term.need_redraw = true;
+}
+
+static void action_scroll_to_bottom(void)
+{
+	tsm_screen_sb_reset(term.screen);
+	term.need_redraw = true;
+}
+
+
+static struct {
+	char *name;
+	void (*f)(void);
+} actions[] = {
+	{ "copy", &action_copy },
+	{ "paste", &action_paste },
+	{ "reset", &action_reset },
+	{ "hard reset", &action_hard_reset },
+	{ "scroll up", &action_scroll_up },
+	{ "scroll down", &action_scroll_down },
+	{ "scroll up page", &action_scroll_up_page },
+	{ "scroll down page", &action_scroll_down_page },
+	{ "scroll to top", &action_scroll_to_top },
+	{ "scroll to bottom", &action_scroll_to_bottom },
+};
 
 #define CONF_FILE "havoc.cfg"
 
@@ -1528,6 +1625,51 @@ static void font_config(char *key, char *val)
 	else if (strcmp(key, "path") == 0)
 		strncpy(term.cfg.font_path, val,
 			sizeof(term.cfg.font_path) - 1);
+}
+
+static void bind_config(char *key, char *val)
+{
+	unsigned int mods = 0;
+	xkb_keysym_t k;
+	struct binding *b;
+	size_t i;
+
+	if (key[0] == '\0')
+		return;
+
+	while (key[1] == '-') {
+		switch (key[0]) {
+		case 'S':
+			mods |= TSM_SHIFT_MASK;
+			break;
+		case 'C':
+			mods |= TSM_CONTROL_MASK;
+			break;
+		case 'A':
+			mods |= TSM_ALT_MASK;
+			break;
+		}
+		key += 2;
+	}
+
+	k = xkb_keysym_from_name(key, XKB_KEYSYM_NO_FLAGS);
+	k = xkb_keysym_to_lower(k);
+	if (k == XKB_KEY_NoSymbol)
+		return;
+
+	b = malloc(sizeof *b);
+	if (b == NULL)
+		return;
+
+	b->mods = mods;
+	b->sym = k;
+
+	for (i = 0; i < ARRAY_LENGTH(actions); ++i) {
+		if (strcmp(val, actions[i].name) == 0)
+			b->action = actions[i].f;
+	}
+	b->next = term.binding;
+	term.binding = b;
 }
 
 static void set_color(enum tsm_vte_color field, uint32_t val)
@@ -1627,6 +1769,8 @@ static void read_config(void)
 				section = &terminal_config;
 			else if (strcmp(key, "font") == 0)
 				section = &font_config;
+			else if (strcmp(key, "bind") == 0)
+				section = &bind_config;
 			else if (strcmp(key, "colors") == 0)
 				section = &color_config;
 			else
@@ -1685,6 +1829,7 @@ int main(int argc, char *argv[])
 	int display_fd;
 	struct epoll_event ee[16];
 	int n, i, ret = 1;
+	struct binding *b;
 
 	while (++argv, *argv && **argv == '-') {
 retry:
@@ -1871,5 +2016,11 @@ econnect:
 exkb:
 	font_deinit();
 efont:
+	b = term.binding;
+	while (b) {
+		struct binding *tmp = b;
+		b = b->next;
+		free(tmp);
+	}
 	return ret;
 }

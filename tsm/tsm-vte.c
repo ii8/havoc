@@ -268,9 +268,6 @@ int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
 	struct tsm_vte *vte;
 	int ret;
 
-	if (!out || !con || !write_cb)
-		return -EINVAL;
-
 	vte = malloc(sizeof(*vte));
 	if (!vte)
 		return -ENOMEM;
@@ -304,19 +301,13 @@ err_free:
 SHL_EXPORT
 void tsm_vte_ref(struct tsm_vte *vte)
 {
-	if (!vte)
-		return;
-
 	vte->ref++;
 }
 
 SHL_EXPORT
 void tsm_vte_unref(struct tsm_vte *vte)
 {
-	if (!vte || !vte->ref)
-		return;
-
-	if (--vte->ref)
+	if (!vte->ref || --vte->ref)
 		return;
 
 	tsm_screen_unref(vte->con);
@@ -343,9 +334,6 @@ int tsm_vte_set_palette(struct tsm_vte *vte, uint8_t (*palette)[3])
 SHL_EXPORT
 void tsm_vte_get_def_attr(struct tsm_vte *vte, struct tsm_screen_attr *out)
 {
-	if (!vte || !out)
-		return;
-
 	memcpy(out, &vte->def_attr, sizeof(*out));
 }
 
@@ -532,9 +520,6 @@ static void restore_state(struct tsm_vte *vte)
 SHL_EXPORT
 void tsm_vte_reset(struct tsm_vte *vte)
 {
-	if (!vte)
-		return;
-
 	vte->flags = 0;
 	vte->flags |= FLAG_TEXT_CURSOR_MODE;
 	vte->flags |= FLAG_AUTO_REPEAT_MODE;
@@ -2160,9 +2145,6 @@ void tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len)
 	int state;
 	uint32_t ucs4;
 	size_t i;
-
-	if (!vte || !vte->con)
-		return;
 
 	++vte->parse_cnt;
 	for (i = 0; i < len; ++i) {
