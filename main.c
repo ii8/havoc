@@ -898,7 +898,7 @@ static void kbd_keymap(void *data, struct wl_keyboard *k, uint32_t fmt,
 		return;
 	}
 
-	map = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+	map = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
 	if (map == MAP_FAILED) {
 		close(fd);
 		return;
@@ -1814,9 +1814,9 @@ static void usage(void)
 			     " Use empty string for defaults.\n"
 	       "  -l         Keep window open after the child process exits.\n"
 	       "  -s <name>  Wayland display server to connect to.\n"
-	       "  -i <name>  Wayland app id.\n"
+	       "  -i <id>    Wayland app ID to use instead of \"havoc\".\n"
+	       "  -v         Show version information.\n"
 	       "  -h         Show this help.\n");
-	exit(EXIT_SUCCESS);
 }
 
 #define take(s) (*(argv+1) \
@@ -1846,9 +1846,12 @@ retry:
 		case 'i':
 			term.opt.app_id = take("wayland app id");
 			break;
+		case 'v':
+			printf("havoc " VERSION "\n");
+			return 0;
 		case 'h':
 			usage();
-			break;
+			return 0;
 		case '-':
 			goto retry;
 		default:
