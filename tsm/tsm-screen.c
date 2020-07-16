@@ -517,6 +517,7 @@ void tsm_screen_unref(struct tsm_screen *con)
 	if (!con->ref || --con->ref)
 		return;
 
+	tsm_screen_clear_sb(con);
 	for (i = 0; i < con->line_num; ++i) {
 		line_free(con->main_lines[i]);
 		line_free(con->alt_lines[i]);

@@ -4,10 +4,10 @@ WAYLAND_SCANNER := wayland-scanner
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 
-VERSION="0.3.0"
+VERSION="0.3.1"
 
 CFLAGS ?= -Wall -Wextra -Wno-unused-parameter -Wno-parentheses
-CFLAGS += -DVERSION=\"$(VERSION)\"
+override CFLAGS += -DVERSION=\"$(VERSION)\"
 
 VPATH=$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell
 LIBS=-lrt -lm -lutil -lwayland-client -lwayland-cursor -lxkbcommon -Ltsm -lhtsm
