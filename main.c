@@ -13,7 +13,16 @@
 #include <sys/timerfd.h>
 #include <fcntl.h>
 #include <unistd.h>
+#ifdef __linux__
 #include <pty.h>
+#elif defined(__FreeBSD__)
+#include <sys/ttycom.h>
+#include <sys/types.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <libutil.h>
+#endif
+
 
 #include <xkbcommon/xkbcommon-compose.h>
 #include <wayland-client-core.h>
@@ -213,7 +222,13 @@ static void handle_tty(int ev)
 	char data[256];
 	int len;
 
-	if (ev & EPOLLIN) {
+	if (ev & EPOLLHUP) {
+		epoll_ctl(term.fd, EPOLL_CTL_DEL, term.master_fd, NULL);
+		close(term.master_fd);
+		term.master_fd = -1;
+		if (!term.opt.linger)
+			term.die = true;
+	} else if (ev & EPOLLIN) {
 		term.need_redraw = true;
 		len = read(term.master_fd, data, sizeof(data));
 		assert(len);
@@ -223,12 +238,6 @@ static void handle_tty(int ev)
 		} else {
 			tsm_vte_input(term.vte, data, len);
 		}
-	} else if (ev & EPOLLHUP) {
-		epoll_ctl(term.fd, EPOLL_CTL_DEL, term.master_fd, NULL);
-		close(term.master_fd);
-		term.master_fd = -1;
-		if (!term.opt.linger)
-			term.die = true;
 	}
 }
 
