@@ -13,7 +13,16 @@
 #include <sys/timerfd.h>
 #include <fcntl.h>
 #include <unistd.h>
+#ifdef __linux__
 #include <pty.h>
+#elif defined(__FreeBSD__)
+#include <sys/ttycom.h>
+#include <sys/types.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <libutil.h>
+#endif
+
 
 #include <xkbcommon/xkbcommon-compose.h>
 #include <wayland-client-core.h>
