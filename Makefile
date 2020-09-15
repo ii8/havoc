@@ -7,10 +7,17 @@ BINDIR ?= $(PREFIX)/bin
 VERSION="0.3.1"
 
 CFLAGS ?= -Wall -Wextra -Wno-unused-parameter -Wno-parentheses
+CFLAGS += `pkg-config --cflags xkbcommon` \
+	`pkg-config --cflags wayland-client` \
+	`pkg-config --cflags wayland-cursor`
 override CFLAGS += -DVERSION=\"$(VERSION)\"
 
 VPATH=$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell
 LIBS=-lrt -lm -lutil -lwayland-client -lwayland-cursor -lxkbcommon -Ltsm -lhtsm
+LIBS+=`pkg-config --libs xkbcommon` \
+	`pkg-config --libs wayland-client` \
+	`pkg-config --libs wayland-cursor`
+
 OBJ=xdg-shell.o gtk-primary-selection.o glyph.o main.o
 GEN=xdg-shell.c xdg-shell.h gtk-primary-selection.c gtk-primary-selection.h
 
