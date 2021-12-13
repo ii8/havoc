@@ -2015,6 +2015,10 @@ eglobals:
 	wl_display_disconnect(term.display);
 
 econnect:
+	xkb_keymap_unref(term.xkb_keymap);
+	xkb_state_unref(term.xkb_state);
+	xkb_compose_table_unref(term.xkb_compose_table);
+	xkb_compose_state_unref(term.xkb_compose_state);
 	xkb_context_unref(term.xkb_ctx);
 exkb:
 	font_deinit();
