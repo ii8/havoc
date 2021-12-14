@@ -554,12 +554,14 @@ static struct buffer *swap_buffers(void)
 
 	assert(term.configured);
 
-	if (!term.buf[0].busy)
+	if (!term.buf[0].busy) {
 		buf = &term.buf[0];
-	else if (!term.buf[1].busy)
+	} else if (!term.buf[1].busy) {
 		buf = &term.buf[1];
-	else
-		abort();
+	} else {
+		fprintf(stderr, "both surface content buffers are busy\n");
+		return NULL;
+	}
 
 	if (term.resize) {
 		buffer_unmap(buf);
@@ -707,6 +709,11 @@ static const struct wl_callback_listener frame_listener = {
 static void redraw(void)
 {
 	struct buffer *buffer = swap_buffers();
+
+	if (buffer == NULL) {
+		fprintf(stderr, "no buffer available, cannot redraw\n");
+		return;
+	}
 
 	wl_surface_attach(term.surf, buffer->b, 0, 0);
 	buffer->age = tsm_screen_draw(term.screen, draw_cell, buffer);
