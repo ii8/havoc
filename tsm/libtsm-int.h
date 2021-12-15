@@ -110,6 +110,8 @@ struct tsm_screen {
 
 	/* default attributes for new cells */
 	struct tsm_screen_attr def_attr;
+	struct tsm_screen_attr main_def_attr;
+	struct tsm_screen_attr alt_def_attr;
 
 	/* ageing */
 	tsm_age_t age_cnt;		/* current age counter */
@@ -149,7 +151,8 @@ struct tsm_screen {
 	struct selection_pos sel_end;
 };
 
-void screen_cell_init(struct tsm_screen *con, struct cell *cell);
+void screen_cell_init(struct tsm_screen *con, struct cell *cell,
+		      struct tsm_screen_attr *attr);
 
 void tsm_screen_set_opts(struct tsm_screen *scr, unsigned int opts);
 void tsm_screen_reset_opts(struct tsm_screen *scr, unsigned int opts);

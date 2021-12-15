@@ -160,6 +160,8 @@ void tsm_screen_sb_reset(struct tsm_screen *con);
 
 void tsm_screen_set_def_attr(struct tsm_screen *con,
 			     const struct tsm_screen_attr *attr);
+void tsm_screen_reset_def_attr(struct tsm_screen *con,
+			       const struct tsm_screen_attr *attr);
 void tsm_screen_reset(struct tsm_screen *con);
 void tsm_screen_set_flags(struct tsm_screen *con, unsigned int flags);
 void tsm_screen_reset_flags(struct tsm_screen *con, unsigned int flags);

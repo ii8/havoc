@@ -325,7 +325,7 @@ int tsm_vte_set_palette(struct tsm_vte *vte, uint8_t (*palette)[3])
 	to_rgb(vte, &vte->def_attr);
 	memcpy(&vte->cattr, &vte->def_attr, sizeof(vte->cattr));
 
-	tsm_screen_set_def_attr(vte->con, &vte->def_attr);
+	tsm_screen_reset_def_attr(vte->con, &vte->def_attr);
 	tsm_screen_erase_screen(vte->con, false);
 
 	return 0;
@@ -543,7 +543,7 @@ void tsm_vte_reset(struct tsm_vte *vte)
 
 	memcpy(&vte->cattr, &vte->def_attr, sizeof(vte->cattr));
 	to_rgb(vte, &vte->cattr);
-	tsm_screen_set_def_attr(vte->con, &vte->def_attr);
+	tsm_screen_reset_def_attr(vte->con, &vte->def_attr);
 
 	reset_state(vte);
 }

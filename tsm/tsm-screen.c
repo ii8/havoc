@@ -110,15 +110,17 @@ static void move_cursor(struct tsm_screen *con, int x, int y)
 	c->age = con->age_cnt;
 }
 
-void screen_cell_init(struct tsm_screen *con, struct cell *cell)
+void screen_cell_init(struct tsm_screen *con, struct cell *cell,
+		      struct tsm_screen_attr *attr)
 {
 	cell->ch = 0;
 	cell->width = 1;
 	cell->age = con->age_cnt;
-	memcpy(&cell->attr, &con->def_attr, sizeof(cell->attr));
+	memcpy(&cell->attr, attr, sizeof(cell->attr));
 }
 
-static int line_new(struct tsm_screen *con, struct line **out, int width)
+static int line_new(struct tsm_screen *con, struct line **out, int width,
+		    struct tsm_screen_attr *attr)
 {
 	struct line *line;
 	int i;
@@ -141,7 +143,7 @@ static int line_new(struct tsm_screen *con, struct line **out, int width)
 	}
 
 	for (i = 0; i < width; ++i)
-		screen_cell_init(con, &line->cells[i]);
+		screen_cell_init(con, &line->cells[i], attr);
 
 	*out = line;
 	return 0;
@@ -153,7 +155,8 @@ static void line_free(struct line *line)
 	free(line);
 }
 
-static int line_resize(struct tsm_screen *con, struct line *line, int width)
+static int line_resize(struct tsm_screen *con, struct line *line, int width,
+		       struct tsm_screen_attr *attr)
 {
 	struct cell *tmp;
 
@@ -165,7 +168,7 @@ static int line_resize(struct tsm_screen *con, struct line *line, int width)
 		line->cells = tmp;
 
 		while (line->size < width) {
-			screen_cell_init(con, &line->cells[line->size]);
+			screen_cell_init(con, &line->cells[line->size], attr);
 			++line->size;
 		}
 	}
@@ -279,7 +282,8 @@ static void screen_scroll_up(struct tsm_screen *con, int num)
 	for (i = 0; i < num; ++i) {
 		pos = con->margin_top + i;
 		if (!(con->flags & TSM_SCREEN_ALTERNATE))
-			ret = line_new(con, &cache[i], con->size_x);
+			ret = line_new(con, &cache[i], con->size_x,
+				       &con->def_attr);
 		else
 			ret = -EAGAIN;
 
@@ -288,7 +292,8 @@ static void screen_scroll_up(struct tsm_screen *con, int num)
 		} else {
 			cache[i] = con->lines[pos];
 			for (j = 0; j < con->size_x; ++j)
-				screen_cell_init(con, &cache[i]->cells[j]);
+				screen_cell_init(con, &cache[i]->cells[j],
+						 &con->def_attr);
 		}
 		con->vanguard--;
 	}
@@ -350,7 +355,8 @@ static void screen_scroll_down(struct tsm_screen *con, int num)
 	for (i = 0; i < num; ++i) {
 		cache[i] = con->lines[con->margin_bottom - i];
 		for (j = 0; j < con->size_x; ++j)
-			screen_cell_init(con, &cache[i]->cells[j]);
+			screen_cell_init(con, &cache[i]->cells[j],
+					 &con->def_attr);
 		con->vanguard++;
 	}
 	if (con->vanguard >= con->size_y)
@@ -440,7 +446,8 @@ static void screen_erase_region(struct tsm_screen *con,
 			if (protect && line->cells[x_from].attr.protect)
 				continue;
 
-			screen_cell_init(con, &line->cells[x_from]);
+			screen_cell_init(con, &line->cells[x_from],
+					 &con->def_attr);
 		}
 		x_from = 0;
 	}
@@ -477,6 +484,12 @@ int tsm_screen_new(struct tsm_screen **out)
 	con->def_attr.fr = 255;
 	con->def_attr.fg = 255;
 	con->def_attr.fb = 255;
+	con->main_def_attr.fr = 255;
+	con->main_def_attr.fg = 255;
+	con->main_def_attr.fb = 255;
+	con->alt_def_attr.fr = 255;
+	con->alt_def_attr.fg = 255;
+	con->alt_def_attr.fb = 255;
 
 	ret = tsm_symbol_table_new(&con->sym_table);
 	if (ret)
@@ -563,9 +576,18 @@ int tsm_screen_resize(struct tsm_screen *con, int x, int y)
 	int i, j, width, diff, start;
 	int ret;
 	bool *tab_ruler;
+	struct tsm_screen_attr *main_attr, *alt_attr;
 
 	if (con->size_x == x && con->size_y == y)
 		return 0;
+
+	if (con->flags & TSM_SCREEN_ALTERNATE) {
+		main_attr = &con->main_def_attr;
+		alt_attr = &con->def_attr;
+	} else {
+		main_attr = &con->def_attr;
+		alt_attr = &con->alt_def_attr;
+	}
 
 	/* First make sure the line buffer is big enough for our new screen.
 	 * That is, allocate all new lines and make sure each line has enough
@@ -601,12 +623,12 @@ int tsm_screen_resize(struct tsm_screen *con, int x, int y)
 
 		while (con->line_num < y) {
 			ret = line_new(con, &con->main_lines[con->line_num],
-				       width);
+				       width, main_attr);
 			if (ret)
 				return ret;
 
 			ret = line_new(con, &con->alt_lines[con->line_num],
-				       width);
+				       width, alt_attr);
 			if (ret) {
 				line_free(con->main_lines[con->line_num]);
 				return ret;
@@ -626,11 +648,13 @@ int tsm_screen_resize(struct tsm_screen *con, int x, int y)
 		con->tab_ruler = tab_ruler;
 
 		for (i = 0; i < con->line_num; ++i) {
-			ret = line_resize(con, con->main_lines[i], x);
+			ret = line_resize(con, con->main_lines[i], x,
+					  main_attr);
 			if (ret)
 				return ret;
 
-			ret = line_resize(con, con->alt_lines[i], x);
+			ret = line_resize(con, con->alt_lines[i], x,
+					  alt_attr);
 			if (ret)
 				return ret;
 		}
@@ -649,7 +673,8 @@ int tsm_screen_resize(struct tsm_screen *con, int x, int y)
 			i = start;
 
 		for ( ; i < con->main_lines[j]->size; ++i)
-			screen_cell_init(con, &con->main_lines[j]->cells[i]);
+			screen_cell_init(con, &con->main_lines[j]->cells[i],
+					 main_attr);
 
 		/* alt-lines never go into SB, only clear visible cells */
 		i = 0;
@@ -657,7 +682,8 @@ int tsm_screen_resize(struct tsm_screen *con, int x, int y)
 			i = con->size_x;
 
 		for ( ; i < x; ++i)
-			screen_cell_init(con, &con->alt_lines[j]->cells[i]);
+			screen_cell_init(con, &con->alt_lines[j]->cells[i],
+					 alt_attr);
 	}
 
 	/* xterm destroys margins on resize, so do we */
@@ -880,6 +906,15 @@ void tsm_screen_set_def_attr(struct tsm_screen *con,
 }
 
 SHL_EXPORT
+void tsm_screen_reset_def_attr(struct tsm_screen *con,
+			       const struct tsm_screen_attr *attr)
+{
+	memcpy(&con->def_attr, attr, sizeof(*attr));
+	memcpy(&con->main_def_attr, attr, sizeof(*attr));
+	memcpy(&con->alt_def_attr, attr, sizeof(*attr));
+}
+
+SHL_EXPORT
 void tsm_screen_reset(struct tsm_screen *con)
 {
 	int i;
@@ -917,6 +952,10 @@ void tsm_screen_set_flags(struct tsm_screen *con, unsigned int flags)
 	if (!(old & TSM_SCREEN_ALTERNATE) && (flags & TSM_SCREEN_ALTERNATE)) {
 		con->age = con->age_cnt;
 		con->lines = con->alt_lines;
+		memcpy(&con->main_def_attr, &con->def_attr,
+		       sizeof(con->main_def_attr));
+		memcpy(&con->def_attr, &con->alt_def_attr,
+		       sizeof(con->def_attr));
 	}
 
 	if (!(old & TSM_SCREEN_HIDE_CURSOR) &&
@@ -946,6 +985,10 @@ void tsm_screen_reset_flags(struct tsm_screen *con, unsigned int flags)
 	if ((old & TSM_SCREEN_ALTERNATE) && (flags & TSM_SCREEN_ALTERNATE)) {
 		con->age = con->age_cnt;
 		con->lines = con->main_lines;
+		memcpy(&con->alt_def_attr, &con->def_attr,
+		       sizeof(con->alt_def_attr));
+		memcpy(&con->def_attr, &con->main_def_attr,
+		       sizeof(con->def_attr));
 	}
 
 	if ((old & TSM_SCREEN_HIDE_CURSOR) &&
@@ -1285,7 +1328,8 @@ void tsm_screen_insert_lines(struct tsm_screen *con, int num)
 	for (i = 0; i < num; ++i) {
 		cache[i] = con->lines[con->margin_bottom - i];
 		for (j = 0; j < con->size_x; ++j)
-			screen_cell_init(con, &cache[i]->cells[j]);
+			screen_cell_init(con, &cache[i]->cells[j],
+					 &con->def_attr);
 		if (con->cursor_y < con->vanguard)
 			con->vanguard++;
 	}
@@ -1327,7 +1371,8 @@ void tsm_screen_delete_lines(struct tsm_screen *con, int num)
 	for (i = 0; i < num; ++i) {
 		cache[i] = con->lines[con->cursor_y + i];
 		for (j = 0; j < con->size_x; ++j)
-			screen_cell_init(con, &cache[i]->cells[j]);
+			screen_cell_init(con, &cache[i]->cells[j],
+					 &con->def_attr);
 		if (con->cursor_y <= con->vanguard)
 			con->vanguard--;
 	}
@@ -1374,7 +1419,8 @@ void tsm_screen_insert_chars(struct tsm_screen *con, int num)
 			mv * sizeof(*cells));
 
 	for (i = 0; i < num; ++i)
-		screen_cell_init(con, &cells[con->cursor_x + i]);
+		screen_cell_init(con, &cells[con->cursor_x + i],
+				 &con->def_attr);
 }
 
 SHL_EXPORT
@@ -1407,7 +1453,8 @@ void tsm_screen_delete_chars(struct tsm_screen *con, int num)
 			mv * sizeof(*cells));
 
 	for (i = 0; i < num; ++i)
-		screen_cell_init(con, &cells[con->cursor_x + mv + i]);
+		screen_cell_init(con, &cells[con->cursor_x + mv + i],
+				 &con->def_attr);
 }
 
 SHL_EXPORT
