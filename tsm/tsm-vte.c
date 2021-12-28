@@ -951,7 +951,6 @@ static void csi_attribute(struct tsm_vte *vte)
 	for (i = 0; i < vte->csi_argc; ++i) {
 		switch (vte->csi_argv[i]) {
 		case -1:
-			break;
 		case 0:
 			copy_fcolor(&vte->cattr, &vte->def_attr);
 			copy_bcolor(&vte->cattr, &vte->def_attr);
