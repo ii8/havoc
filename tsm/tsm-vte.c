@@ -1493,6 +1493,14 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
 		x = tsm_screen_get_cursor_x(vte->con);
 		tsm_screen_move_to(vte->con, x, num - 1);
 		break;
+	case 'E': /* CNL */
+		/* Cursor Next Line */
+		num = vte->csi_argv[0];
+		if (num <= 0)
+			num = 1;
+		tsm_screen_move_down(vte->con, num, false);
+		tsm_screen_move_line_home(vte->con);
+		break;
 	case 'e': /* VPR */
 		/* Vertical Line Position Relative */
 		num = vte->csi_argv[0];
@@ -1501,6 +1509,14 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
 		x = tsm_screen_get_cursor_x(vte->con);
 		y = tsm_screen_get_cursor_y(vte->con);
 		tsm_screen_move_to(vte->con, x, y + num);
+		break;
+	case 'F': /* CPL */
+		/* Cursor Preceding Line */
+		num = vte->csi_argv[0];
+		if (num <= 0)
+			num = 1;
+		tsm_screen_move_up(vte->con, num, false);
+		tsm_screen_move_line_home(vte->con);
 		break;
 	case 'H': /* CUP */
 	case 'f': /* HVP */
