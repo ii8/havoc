@@ -207,7 +207,7 @@ static int find_index(const struct font *f, uint32_t codepoint)
 	} else if (format == 4) {
 		/* standard mapping for windows fonts: binary search
 		 * collection of ranges */
-		uint16_t offset, start, item;
+		uint16_t offset, start, last, item;
 		uint8_t *idx;
 		uint16_t segcount = read_ushort(data + index_map + 6) >> 1;
 		uint16_t range = read_ushort(data + index_map + 8) >> 1;
@@ -239,9 +239,9 @@ static int find_index(const struct font *f, uint32_t codepoint)
 
 		item = (search + 2 - end_count) >> 1;
 		idx = data + index_map + 14;
-		assert(codepoint <= read_ushort(data + end_count + 2 * item));
 		start = read_ushort(idx + segcount * 2 + 2 + 2 * item);
-		if (codepoint < start)
+		last = read_ushort(data + end_count + 2 * item);
+		if (codepoint < start || codepoint > last)
 			return 0;
 
 		offset = read_ushort(idx + segcount * 6 + 2 + 2 * item);
@@ -492,7 +492,7 @@ static int glyph_shape(const struct font *f, int glyph_index,
 		}
 		vcount = close_shape(vertices, vcount, was_off, start_off,
 				     sx, sy, scx, scy, cx, cy);
-	} else if (ncontours == -1) {
+	} else if (ncontours < 0) {
 		/* Compound shapes */
 		uint16_t flags = (1 << 5);
 		uint8_t *comp = f->data + g + 10;
@@ -594,8 +594,6 @@ static int glyph_shape(const struct font *f, int glyph_index,
 			free(comp_verts);
 			vcount += comp_num_verts;
 		}
-	} else if (ncontours < 0) {
-		/* TODO other compound variations? */
 	} else {
 		/* ncontours == 0, do nothing */
 	}
@@ -754,6 +752,24 @@ static void handle_clipped_edge(float *scanline, int x, struct active_edge *e,
 	}
 }
 
+
+static float sized_trapezoid_area(float height, float top_width, float bottom_width)
+{
+   assert(top_width >= 0);
+   assert(bottom_width >= 0);
+   return (top_width + bottom_width) / 2.0f * height;
+}
+
+static float position_trapezoid_area(float height, float tx0, float tx1, float bx0, float bx1)
+{
+   return sized_trapezoid_area(height, tx1 - tx0, bx1 - bx0);
+}
+
+static float sized_triangle_area(float height, float width)
+{
+   return height * width / 2;
+}
+
 static void fill_active_edges_new(float *scanline, float *scanline_fill,
 				  int len, struct active_edge *e, float y_top)
 {
@@ -809,13 +825,13 @@ static void fill_active_edges_new(float *scanline, float *scanline_fill,
 					float height;
 					// simple case, only spans one pixel
 					int x = (int)x_top;
-					height = sy1 - sy0;
+					height = (sy1 - sy0) * e->direction;
 					assert(x >= 0 && x < len);
-					scanline[x] += e->direction * (1 - ((x_top - x) + (x_bottom - x)) / 2) * height;
-					scanline_fill[x] += e->direction * height; /* everything right of this pixel is filled */
+					scanline[x] += position_trapezoid_area(height, x_top, x+1.0f, x_bottom, x+1.0f);
+					scanline_fill[x] += height; /* everything right of this pixel is filled */
 				} else {
 					int x, x1, x2;
-					float y_crossing, step, sign, area;
+					float y_crossing, y_final, step, sign, area;
 					/* covers 2+ pixels */
 					if (x_top > x_bottom) {
 						/* flip scanline vertically
@@ -829,28 +845,45 @@ static void fill_active_edges_new(float *scanline, float *scanline_fill,
 						dy = -dy;
 						t = x0, x0 = xb, xb = t;
 					}
+					assert(dy >= 0);
+					assert(dx >= 0);
 
 					x1 = (int)x_top;
 					x2 = (int)x_bottom;
 					// compute intersection with y axis at x1+1
-					y_crossing = (x1 + 1 - x0) * dy + y_top;
+					y_crossing = y_top + dy * (x1+1 - x0);
+					// compute intersection with y axis at x2
+					y_final = y_top + dy * (x2 - x0); 
+
+					// if x2 is right at the right edge of x1, y_crossing can blow up, github #1057
+					if (y_crossing > y_bottom)
+						y_crossing = y_bottom;
 
 					sign = e->direction;
-					/* area of the rectangle covered from y0..y_crossing */
+					// area of the rectangle covered from sy0..y_crossing
 					area = sign * (y_crossing - sy0);
-					/* area of the triangle (x_top,y0), (x+1,y0), (x+1,y_crossing) */
-					scanline[x1] += area * (1 - ((x_top - x1) + (x1 + 1 - x1)) / 2);
+					// area of the triangle (x_top,sy0), (x1+1,sy0), (x1+1,y_crossing)
+					scanline[x1] += sized_triangle_area(area, x1+1 - x_top);
 
-					step = sign * dy;
+					// check if final y_crossing is blown up; no test case for this
+					if (y_final > y_bottom) {
+						y_final = y_bottom;
+						dy = (y_final - y_crossing ) / (x2 - (x1+1)); // if denom=0, y_final = y_crossing, so y_final <= y_bottom
+					}
+
+					step = sign * dy * 1; // dy is dy/dx, change in y for every 1 change in x, which is also how much pixel area changes for each step in x
 					for (x = x1 + 1; x < x2; ++x) {
-						scanline[x] += area + step / 2;
+						scanline[x] += area + step/2; // area of trapezoid is 1*step/2
 						area += step;
 					}
-					y_crossing += dy * (x2 - (x1 + 1));
 
 					assert(fabs(area) <= 1.01f);
+					assert(sy1 > y_final-0.01f);
 
-					scanline[x2] += area + sign * (1 - ((x2 - x2) + (x_bottom - x2)) / 2) * (sy1 - y_crossing);
+					// area covered in the last pixel is the rectangle from all the pixels to the left,
+					// plus the trapezoid filled by the line segment in this pixel all the way to the right edge
+					scanline[x2] += area + sign * position_trapezoid_area(sy1-y_final, (float) x2, x2+1.0f, x_bottom, x2+1.0f);
+					// the rest of the line is filled based on the total height of the line segment in this pixel
 					scanline_fill[x2] += sign * (sy1 - sy0);
 				}
 			} else {
