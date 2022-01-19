@@ -1470,7 +1470,7 @@ unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth)
 		NULL
 	};
 
-	bm.pixels = malloc(bm.w * bm.h);
+	bm.pixels = calloc(1, bm.w * bm.h);
 
 	get_glyph_origin(&font, glyph, &xmin, &ymin);
 	render(&bm, 0.35f, vertices, vcount, font.scale, font.scale,
