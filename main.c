@@ -122,8 +122,8 @@ static struct {
 	struct {
 		struct wl_data_offer *d_offer;
 		struct gtk_primary_selection_offer *ps_offer;
-		bool d_acceptable;
-		bool ps_acceptable;
+		char *d_mime;
+		char *ps_mime;
 
 		int fd[2];
 		char buf[200];
@@ -741,10 +741,10 @@ static void paste(bool primary)
 	struct epoll_event ee;
 
 	if (primary) {
-		if (!term.ps_dm || !term.paste.ps_acceptable)
+		if (!term.ps_dm || !term.paste.ps_mime)
 			return;
 	} else {
-		if (!term.d_dm || !term.paste.d_acceptable)
+		if (!term.d_dm || !term.paste.d_mime)
 			return;
 	}
 
@@ -756,10 +756,10 @@ static void paste(bool primary)
 
 	if (primary) {
 		gtk_primary_selection_offer_receive(term.paste.ps_offer,
-						    "UTF8_STRING",
+						    term.paste.ps_mime,
 						    term.paste.fd[1]);
 	} else {
-		wl_data_offer_receive(term.paste.d_offer, "UTF8_STRING",
+		wl_data_offer_receive(term.paste.d_offer, term.paste.d_mime,
 				      term.paste.fd[1]);
 	}
 	close(term.paste.fd[1]);
@@ -827,6 +827,7 @@ static void d_copy(uint32_t serial)
 	term.d_copy.source =
 		wl_data_device_manager_create_data_source(term.d_dm);
 	wl_data_source_offer(term.d_copy.source, "UTF8_STRING");
+	wl_data_source_offer(term.d_copy.source, "text/plain");
 	wl_data_source_add_listener(term.d_copy.source, &ds_listener, NULL);
 	wl_data_device_set_selection(term.d_d, term.d_copy.source, serial);
 }
@@ -1105,6 +1106,7 @@ static void ps_copy(uint32_t serial)
 	term.ps_copy.source =
 		gtk_primary_selection_device_manager_create_source(term.ps_dm);
 	gtk_primary_selection_source_offer(term.ps_copy.source, "UTF8_STRING");
+	gtk_primary_selection_source_offer(term.ps_copy.source, "text/plain");
 	gtk_primary_selection_source_add_listener(term.ps_copy.source,
 						  &pss_listener, NULL);
 	gtk_primary_selection_device_set_selection(term.ps_d,
@@ -1280,7 +1282,10 @@ static const struct wl_seat_listener seat_listener = {
 static void do_offer(void *d, struct wl_data_offer *o, const char *mime_type)
 {
 	if (strcmp(mime_type, "UTF8_STRING") == 0)
-		term.paste.d_acceptable = true;
+		term.paste.d_mime = "UTF8_STRING";
+	else if(term.paste.d_mime == NULL &&
+		strcmp(mime_type, "text/plain") == 0)
+		term.paste.d_mime = "text/plain";
 }
 
 static void do_source_actions(void *d, struct wl_data_offer *o, uint32_t sa)
@@ -1303,7 +1308,7 @@ static void dd_data_offer(void *data, struct wl_data_device *wl_data_device,
 	if (term.paste.d_offer)
 		wl_data_offer_destroy(term.paste.d_offer);
 	term.paste.d_offer = offer;
-	term.paste.d_acceptable = false;
+	term.paste.d_mime = NULL;
 	wl_data_offer_add_listener(offer, &do_listener, NULL);
 }
 
@@ -1332,7 +1337,7 @@ static void dd_selection(void *data, struct wl_data_device *wl_data_device,
 	if (id == NULL && term.paste.d_offer) {
 		wl_data_offer_destroy(term.paste.d_offer);
 		term.paste.d_offer = NULL;
-		term.paste.d_acceptable = false;
+		term.paste.d_mime = NULL;
 	}
 }
 
@@ -1350,7 +1355,10 @@ static void pso_offer(void *data,
 		      const char *mime_type)
 {
 	if (strcmp(mime_type, "UTF8_STRING") == 0)
-		term.paste.ps_acceptable = true;
+		term.paste.ps_mime = "UTF8_STRING";
+	else if(term.paste.ps_mime == NULL &&
+		strcmp(mime_type, "text/plain") == 0)
+		term.paste.ps_mime = "text/plain";
 }
 
 static const struct gtk_primary_selection_offer_listener pso_listener = {
@@ -1364,7 +1372,7 @@ static void psd_data_offer(void *data,
 	if (term.paste.ps_offer)
 		gtk_primary_selection_offer_destroy(term.paste.ps_offer);
 	term.paste.ps_offer = offer;
-	term.paste.ps_acceptable = false;
+	term.paste.ps_mime = NULL;
 	gtk_primary_selection_offer_add_listener(offer, &pso_listener, NULL);
 }
 
@@ -1375,7 +1383,7 @@ static void psd_selection(void *data,
 	if (id == NULL && term.paste.ps_offer) {
 		gtk_primary_selection_offer_destroy(term.paste.ps_offer);
 		term.paste.ps_offer = NULL;
-		term.paste.ps_acceptable = false;
+		term.paste.ps_mime = NULL;
 	}
 }
 
