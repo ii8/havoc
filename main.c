@@ -88,6 +88,7 @@ static struct {
 
 	struct {
 		struct wl_cursor_theme *theme;
+		struct wl_cursor *text;
 		struct wl_cursor *current;
 		long long anim_start;
 		struct wl_surface *surface;
@@ -311,7 +312,7 @@ static void cursor_unset(void)
 	term.cursor.current = NULL;
 }
 
-static void cursor_set(const char *name)
+static void cursor_set(struct wl_cursor *cursor)
 {
 	uint32_t duration;
 	int frame;
@@ -321,16 +322,10 @@ static void cursor_set(const char *name)
 	if (term.ptr == NULL)
 		return;
 
-	if (term.cursor.theme == NULL)
+	if (cursor == NULL)
 		goto hide;
 
-	if (name == NULL)
-		goto hide;
-
-	term.cursor.current = wl_cursor_theme_get_cursor(term.cursor.theme,
-							 name);
-	if (term.cursor.current == NULL)
-		goto hide;
+	term.cursor.current = cursor;
 
 	frame = wl_cursor_frame_and_duration(term.cursor.current, 0, &duration);
 	if (duration) {
@@ -348,6 +343,7 @@ static void cursor_init(void)
 {
 	int size = 32;
 	char *size_str = getenv("XCURSOR_SIZE");
+	struct wl_cursor *text = NULL;
 
 	if (size_str && *size_str) {
 		char *end;
@@ -364,11 +360,20 @@ static void cursor_init(void)
 	if (term.cursor.theme == NULL)
 		return;
 
+	text = wl_cursor_theme_get_cursor(term.cursor.theme, "text");
+	if (text == NULL)
+		text = wl_cursor_theme_get_cursor(term.cursor.theme, "ibeam");
+	if (text == NULL)
+		text = wl_cursor_theme_get_cursor(term.cursor.theme, "xterm");
+
 	term.cursor.surface = wl_compositor_create_surface(term.cp);
 	if (term.cursor.surface == NULL) {
 		wl_cursor_theme_destroy(term.cursor.theme);
 		term.cursor.theme = NULL;
+		return;
 	}
+
+	term.cursor.text = text;
 }
 
 static void cursor_free(void)
@@ -1143,7 +1148,7 @@ static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
 	term.ptr_y = y;
 
 	term.cursor.enter_serial = serial;
-	cursor_set("text");
+	cursor_set(term.cursor.text);
 }
 
 static void ptr_leave(void *data, struct wl_pointer *wl_pointer,
@@ -1170,8 +1175,8 @@ static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
 		term.need_redraw = true;
 	}
 
-	if (term.cursor.current == NULL)
-		cursor_set("text");
+	if (term.cursor.current == NULL && term.cursor.text)
+		cursor_set(term.cursor.text);
 }
 
 static void ptr_button(void *data, struct wl_pointer *wl_pointer,
@@ -1200,8 +1205,8 @@ static void ptr_button(void *data, struct wl_pointer *wl_pointer,
 		paste(true);
 	}
 
-	if (term.cursor.current == NULL)
-		cursor_set("text");
+	if (term.cursor.current == NULL && term.cursor.text)
+		cursor_set(term.cursor.text);
 }
 
 static void ptr_axis(void *data, struct wl_pointer *wl_pointer,
