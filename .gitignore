@@ -2,4 +2,5 @@
 *.a
 xdg-shell.[ch]
 gtk-primary-selection.[ch]
+xdg-decoration-unstable-v1.[ch]
 havoc

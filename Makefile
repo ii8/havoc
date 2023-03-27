@@ -9,10 +9,11 @@ VERSION="0.4.0-git"
 CFLAGS ?= -Wall -Wextra -Wno-unused-parameter -Wno-parentheses
 override CFLAGS += -DVERSION=\"$(VERSION)\"
 
-VPATH=$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell
+VPATH=$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell:$(WAYLAND_PROTOCOLS_DIR)/unstable/xdg-decoration
 LIBS=-lrt -lm -lutil -lwayland-client -lwayland-cursor -lxkbcommon -Ltsm -lhtsm
-OBJ=xdg-shell.o gtk-primary-selection.o glyph.o main.o
-GEN=xdg-shell.c xdg-shell.h gtk-primary-selection.c gtk-primary-selection.h
+OBJ=xdg-shell.o xdg-decoration-unstable-v1.o gtk-primary-selection.o glyph.o main.o
+GEN=xdg-shell.c xdg-shell.h xdg-decoration-unstable-v1.c \
+	xdg-decoration-unstable-v1.h gtk-primary-selection.c gtk-primary-selection.h
 
 havoc: tsm $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
