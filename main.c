@@ -23,12 +23,19 @@
 #include "tsm/libtsm.h"
 #include "xdg-shell.h"
 #include "gtk-primary-selection.h"
+#include "xdg-decoration-unstable-v1.h"
 
 #define ARRAY_LENGTH(a) (sizeof (a) / sizeof (a)[0])
 
 int font_init(int, char *, int *, int *);
 void font_deinit(void);
 unsigned char *get_glyph(uint32_t, uint32_t, int);
+
+enum deco {
+	DECO_AUTO,
+	DECO_SERVER,
+	DECO_NONE
+};
 
 static struct {
 	bool die;
@@ -133,6 +140,11 @@ static struct {
 	} paste;
 
 	struct {
+		struct zxdg_decoration_manager_v1 *manager;
+		struct zxdg_toplevel_decoration_v1 *deco;
+	} deco;
+
+	struct {
 		bool linger;
 		char *config;
 		char *display;
@@ -152,6 +164,7 @@ static struct {
 		int scrollback;
 		bool margin;
 		unsigned char opacity;
+		enum deco decorations;
 		int font_size;
 		char font_path[512];
 		uint8_t colors[TSM_COLOR_NUM][3];
@@ -163,6 +176,7 @@ static struct {
 	.cfg.scrollback = 0,
 	.cfg.margin = false,
 	.cfg.opacity = 0xff,
+	.cfg.decorations = DECO_AUTO,
 	.cfg.font_size = 18,
 	.cfg.font_path = "",
 	.cfg.colors = {
@@ -1503,6 +1517,26 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "gtk_primary_selection_device_manager") == 0) {
 		term.ps_dm = wl_registry_bind(r, id,
 			&gtk_primary_selection_device_manager_interface, 1);
+	} else if (strcmp(i, "zxdg_decoration_manager_v1") == 0) {
+		term.deco.manager = wl_registry_bind(r, id,
+			&zxdg_decoration_manager_v1_interface, 1);
+	}
+}
+
+static void setup_deco(void)
+{
+	if (term.deco.manager) {
+		term.deco.deco =
+			zxdg_decoration_manager_v1_get_toplevel_decoration(
+				term.deco.manager, term.toplvl);
+
+		if (term.cfg.decorations == DECO_AUTO)
+			zxdg_toplevel_decoration_v1_unset_mode(term.deco.deco);
+		else
+			zxdg_toplevel_decoration_v1_set_mode(term.deco.deco,
+				term.cfg.decorations == DECO_NONE
+				? ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE
+				: ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
 	}
 }
 
@@ -1626,6 +1660,9 @@ static void window_config(char *key, char *val)
 		term.cfg.opacity = cfg_num(val, 10, 0, 255);
 	else if (strcmp(key, "margin") == 0)
 		term.cfg.margin = strcmp(val, "yes") == 0;
+	else if (strcmp(key, "decorations") == 0)
+		term.cfg.decorations = strcmp(val, "yes") == 0 ? DECO_SERVER
+			: (strcmp(val, "no") == 0 ? DECO_NONE : DECO_AUTO);
 }
 
 static void terminal_config(char *key, char *val)
@@ -1937,6 +1974,8 @@ retry:
 	xdg_toplevel_set_title(term.toplvl, "havoc");
 	xdg_toplevel_set_app_id(term.toplvl, term.opt.app_id);
 
+	setup_deco();
+
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
 
@@ -2004,6 +2043,12 @@ etimer:
 		wl_pointer_release(term.ptr);
 	if (term.kbd)
 		wl_keyboard_release(term.kbd);
+
+	if (term.deco.deco)
+		zxdg_toplevel_decoration_v1_destroy(term.deco.deco);
+
+	if (term.deco.manager)
+		zxdg_decoration_manager_v1_destroy(term.deco.manager);
 
 	xdg_toplevel_destroy(term.toplvl);
 etoplvl:
