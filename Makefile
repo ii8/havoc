@@ -4,9 +4,9 @@ WAYLAND_SCANNER := wayland-scanner
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 
-VERSION="0.4.0-git"
+VERSION="0.5.0"
 
-CFLAGS ?= -Wall -Wextra -Wno-unused-parameter -Wno-parentheses
+CFLAGS ?= -Wall -Wextra -Wno-unused-parameter -Wno-parentheses -Wno-format-overflow
 override CFLAGS += -DVERSION=\"$(VERSION)\"
 
 VPATH=$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell:$(WAYLAND_PROTOCOLS_DIR)/unstable/xdg-decoration

@@ -31,6 +31,10 @@ int font_init(int, char *, int *, int *);
 void font_deinit(void);
 unsigned char *get_glyph(uint32_t, uint32_t, int);
 
+static void noop()
+{
+}
+
 enum deco {
 	DECO_AUTO,
 	DECO_SERVER,
@@ -1266,7 +1270,10 @@ static struct wl_pointer_listener ptr_listener = {
 	ptr_frame,
 	ptr_axis_source,
 	ptr_axis_stop,
-	ptr_axis_discrete
+	ptr_axis_discrete,
+#ifdef WL_POINTER_AXIS_VALUE120_SINCE_VERSION
+	noop,
+#endif
 };
 
 static void seat_capabilities(void *data, struct wl_seat *seat, uint32_t caps)
@@ -1427,7 +1434,13 @@ static void toplvl_close(void *data, struct xdg_toplevel *t)
 
 static const struct xdg_toplevel_listener toplvl_listener = {
 	toplvl_configure,
-	toplvl_close
+	toplvl_close,
+#ifdef XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION
+	noop,
+#endif
+#ifdef XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION
+	noop,
+#endif
 };
 
 static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
