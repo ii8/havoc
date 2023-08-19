@@ -4,16 +4,21 @@ WAYLAND_SCANNER := wayland-scanner
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 
-VERSION="0.5.0"
+VERSION="0.5.0-git"
 
 CFLAGS ?= -Wall -Wextra -Wno-unused-parameter -Wno-parentheses -Wno-format-overflow
 override CFLAGS += -DVERSION=\"$(VERSION)\"
 
-VPATH=$(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell:$(WAYLAND_PROTOCOLS_DIR)/unstable/xdg-decoration
+VPATH = $(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell \
+	$(WAYLAND_PROTOCOLS_DIR)/unstable/xdg-decoration \
+	$(WAYLAND_PROTOCOLS_DIR)/unstable/primary-selection
+
+GEN =	xdg-shell.h xdg-shell.c \
+	xdg-decoration-unstable-v1.h xdg-decoration-unstable-v1.c \
+	primary-selection-unstable-v1.h primary-selection-unstable-v1.c
+
 LIBS=-lrt -lm -lutil -lwayland-client -lwayland-cursor -lxkbcommon -Ltsm -lhtsm
-OBJ=xdg-shell.o xdg-decoration-unstable-v1.o gtk-primary-selection.o glyph.o main.o
-GEN=xdg-shell.c xdg-shell.h xdg-decoration-unstable-v1.c \
-	xdg-decoration-unstable-v1.h gtk-primary-selection.c gtk-primary-selection.h
+OBJ=xdg-shell.o xdg-decoration-unstable-v1.o primary-selection-unstable-v1.o glyph.o main.o
 
 havoc: tsm $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)

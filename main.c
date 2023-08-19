@@ -22,7 +22,7 @@
 
 #include "tsm/libtsm.h"
 #include "xdg-shell.h"
-#include "gtk-primary-selection.h"
+#include "primary-selection-unstable-v1.h"
 #include "xdg-decoration-unstable-v1.h"
 
 #define ARRAY_LENGTH(a) (sizeof (a) / sizeof (a)[0])
@@ -118,8 +118,8 @@ static struct {
 
 	struct wl_data_device_manager *d_dm;
 	struct wl_data_device *d_d;
-	struct gtk_primary_selection_device_manager *ps_dm;
-	struct gtk_primary_selection_device *ps_d;
+	struct zwp_primary_selection_device_manager_v1 *ps_dm;
+	struct zwp_primary_selection_device_v1 *ps_d;
 
 	struct {
 		struct wl_data_source *source;
@@ -127,13 +127,13 @@ static struct {
 	} d_copy;
 
 	struct {
-		struct gtk_primary_selection_source *source;
+		struct zwp_primary_selection_source_v1 *source;
 		char *data;
 	} ps_copy;
 
 	struct {
 		struct wl_data_offer *d_offer;
-		struct gtk_primary_selection_offer *ps_offer;
+		struct zwp_primary_selection_offer_v1 *ps_offer;
 		char *d_mime;
 		char *ps_mime;
 
@@ -778,9 +778,9 @@ static void paste(bool primary)
 		return;
 
 	if (primary) {
-		gtk_primary_selection_offer_receive(term.paste.ps_offer,
-						    term.paste.ps_mime,
-						    term.paste.fd[1]);
+		zwp_primary_selection_offer_v1_receive(term.paste.ps_offer,
+						       term.paste.ps_mime,
+						       term.paste.fd[1]);
 	} else {
 		wl_data_offer_receive(term.paste.d_offer, term.paste.d_mime,
 				      term.paste.fd[1]);
@@ -1097,7 +1097,7 @@ static struct wl_keyboard_listener kbd_listener = {
 };
 
 static void pss_send(void *data,
-		     struct gtk_primary_selection_source *source,
+		     struct zwp_primary_selection_source_v1 *source,
 		     const char *mime_type,
 		     int32_t fd)
 {
@@ -1106,17 +1106,18 @@ static void pss_send(void *data,
 }
 
 static void pss_cancelled(void *data,
-			  struct gtk_primary_selection_source *source)
+			  struct zwp_primary_selection_source_v1 *source)
 {
-	gtk_primary_selection_source_destroy(term.ps_copy.source);
+	zwp_primary_selection_source_v1_destroy(term.ps_copy.source);
 	term.ps_copy.source = NULL;
 	free(term.ps_copy.data);
 }
 
-static struct gtk_primary_selection_source_listener pss_listener = {
+static struct zwp_primary_selection_source_v1_listener pss_listener = {
 	pss_send,
 	pss_cancelled
 };
+
 
 static void ps_copy(uint32_t serial)
 {
@@ -1127,14 +1128,14 @@ static void ps_copy(uint32_t serial)
 		return;
 
 	term.ps_copy.source =
-		gtk_primary_selection_device_manager_create_source(term.ps_dm);
-	gtk_primary_selection_source_offer(term.ps_copy.source, "UTF8_STRING");
-	gtk_primary_selection_source_offer(term.ps_copy.source, "text/plain");
-	gtk_primary_selection_source_add_listener(term.ps_copy.source,
-						  &pss_listener, NULL);
-	gtk_primary_selection_device_set_selection(term.ps_d,
-						   term.ps_copy.source,
-						   serial);
+		zwp_primary_selection_device_manager_v1_create_source(term.ps_dm);
+	zwp_primary_selection_source_v1_offer(term.ps_copy.source, "UTF8_STRING");
+	zwp_primary_selection_source_v1_offer(term.ps_copy.source, "text/plain");
+	zwp_primary_selection_source_v1_add_listener(term.ps_copy.source,
+						     &pss_listener, NULL);
+	zwp_primary_selection_device_v1_set_selection(term.ps_d,
+						      term.ps_copy.source,
+						      serial);
 }
 
 static void ps_uncopy(void)
@@ -1377,7 +1378,7 @@ static const struct wl_data_device_listener dd_listener = {
 };
 
 static void pso_offer(void *data,
-		      struct gtk_primary_selection_offer *offer,
+		      struct zwp_primary_selection_offer_v1 *offer,
 		      const char *mime_type)
 {
 	if (strcmp(mime_type, "UTF8_STRING") == 0)
@@ -1387,33 +1388,33 @@ static void pso_offer(void *data,
 		term.paste.ps_mime = "text/plain";
 }
 
-static const struct gtk_primary_selection_offer_listener pso_listener = {
+static const struct zwp_primary_selection_offer_v1_listener pso_listener = {
 	pso_offer
 };
 
 static void psd_data_offer(void *data,
-			   struct gtk_primary_selection_device *ps_d,
-			   struct gtk_primary_selection_offer *offer)
+			   struct zwp_primary_selection_device_v1 *ps_d,
+			   struct zwp_primary_selection_offer_v1 *offer)
 {
 	if (term.paste.ps_offer)
-		gtk_primary_selection_offer_destroy(term.paste.ps_offer);
+		zwp_primary_selection_offer_v1_destroy(term.paste.ps_offer);
 	term.paste.ps_offer = offer;
 	term.paste.ps_mime = NULL;
-	gtk_primary_selection_offer_add_listener(offer, &pso_listener, NULL);
+	zwp_primary_selection_offer_v1_add_listener(offer, &pso_listener, NULL);
 }
 
 static void psd_selection(void *data,
-			  struct gtk_primary_selection_device *ps_d,
-			  struct gtk_primary_selection_offer *id)
+			  struct zwp_primary_selection_device_v1 *ps_d,
+			  struct zwp_primary_selection_offer_v1 *id)
 {
 	if (id == NULL && term.paste.ps_offer) {
-		gtk_primary_selection_offer_destroy(term.paste.ps_offer);
+		zwp_primary_selection_offer_v1_destroy(term.paste.ps_offer);
 		term.paste.ps_offer = NULL;
 		term.paste.ps_mime = NULL;
 	}
 }
 
-static const struct gtk_primary_selection_device_listener psd_listener = {
+static const struct zwp_primary_selection_device_v1_listener psd_listener = {
 	psd_data_offer,
 	psd_selection
 };
@@ -1527,9 +1528,9 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "wl_data_device_manager") == 0) {
 		term.d_dm = wl_registry_bind(r, id,
 			&wl_data_device_manager_interface, 2);
-	} else if (strcmp(i, "gtk_primary_selection_device_manager") == 0) {
+	} else if (strcmp(i, "zwp_primary_selection_device_manager_v1") == 0) {
 		term.ps_dm = wl_registry_bind(r, id,
-			&gtk_primary_selection_device_manager_interface, 1);
+			&zwp_primary_selection_device_manager_v1_interface, 1);
 	} else if (strcmp(i, "zxdg_decoration_manager_v1") == 0) {
 		term.deco.manager = wl_registry_bind(r, id,
 			&zxdg_decoration_manager_v1_interface, 1);
@@ -2004,10 +2005,11 @@ retry:
 	}
 
 	if (term.ps_dm && term.seat) {
-		term.ps_d = gtk_primary_selection_device_manager_get_device(
+		term.ps_d = zwp_primary_selection_device_manager_v1_get_device(
 			term.ps_dm, term.seat);
-		gtk_primary_selection_device_add_listener(term.ps_d,
-							  &psd_listener, NULL);
+		zwp_primary_selection_device_v1_add_listener(term.ps_d,
+							     &psd_listener,
+							     NULL);
 	}
 
 	display_fd = wl_display_get_fd(term.display);
@@ -2051,7 +2053,7 @@ etimer:
 	if (term.d_d)
 		wl_data_device_release(term.d_d);
 	if (term.ps_d)
-		gtk_primary_selection_device_destroy(term.ps_d);
+		zwp_primary_selection_device_v1_destroy(term.ps_d);
 	if (term.ptr)
 		wl_pointer_release(term.ptr);
 	if (term.kbd)
@@ -2076,7 +2078,7 @@ etsm:
 	cursor_free();
 eglobals:
 	if (term.ps_dm)
-		gtk_primary_selection_device_manager_destroy(term.ps_dm);
+		zwp_primary_selection_device_manager_v1_destroy(term.ps_dm);
 	if (term.d_dm)
 		wl_data_device_manager_destroy(term.d_dm);
 	if (term.seat)
