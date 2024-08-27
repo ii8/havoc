@@ -886,16 +886,17 @@ void tsm_screen_sb_page_down(struct tsm_screen *con, int num)
 }
 
 SHL_EXPORT
-void tsm_screen_sb_reset(struct tsm_screen *con)
+bool tsm_screen_sb_reset(struct tsm_screen *con)
 {
 	if (!con->sb_pos)
-		return;
+		return false;
 
 	screen_inc_age(con);
 	/* TODO: more sophisticated ageing */
 	con->age = con->age_cnt;
 
 	con->sb_pos = NULL;
+	return true;
 }
 
 SHL_EXPORT
