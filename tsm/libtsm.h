@@ -156,7 +156,7 @@ void tsm_screen_sb_up(struct tsm_screen *con, int num);
 void tsm_screen_sb_down(struct tsm_screen *con, int num);
 void tsm_screen_sb_page_up(struct tsm_screen *con, int num);
 void tsm_screen_sb_page_down(struct tsm_screen *con, int num);
-void tsm_screen_sb_reset(struct tsm_screen *con);
+bool tsm_screen_sb_reset(struct tsm_screen *con);
 
 void tsm_screen_set_def_attr(struct tsm_screen *con,
 			     const struct tsm_screen_attr *attr);

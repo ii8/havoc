@@ -166,6 +166,7 @@ static struct {
 		char shell[32];
 		int col, row;
 		int scrollback;
+		bool scroll_to_bottom_on_input;
 		bool margin;
 		unsigned char opacity;
 		enum deco decorations;
@@ -178,6 +179,7 @@ static struct {
 	.cfg.col = 80,
 	.cfg.row = 24,
 	.cfg.scrollback = 0,
+	.cfg.scroll_to_bottom_on_input = false,
 	.cfg.margin = false,
 	.cfg.opacity = 0xff,
 	.cfg.decorations = DECO_AUTO,
@@ -479,6 +481,8 @@ static void handle_paste(int ev)
 			return;
 		}
 
+		if (term.cfg.scroll_to_bottom_on_input)
+			tsm_screen_sb_reset(term.screen);
 		term.need_redraw = true;
 		term.paste.len += len;
 		while (term.paste.len > 0) {
@@ -1035,9 +1039,13 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		b = b->next;
 	}
 
-	if (!action)
-		tsm_vte_handle_keyboard(term.vte, sym, XKB_KEY_NoSymbol,
-					term.mods, unicode);
+	if (!action) {
+		if (tsm_vte_handle_keyboard(term.vte, sym, XKB_KEY_NoSymbol,
+					    term.mods, unicode) &&
+		    term.cfg.scroll_to_bottom_on_input &&
+		    tsm_screen_sb_reset(term.screen))
+			term.need_redraw = true;
+	}
 
 	if (xkb_keymap_key_repeats(term.xkb_keymap, key + 8)) {
 		term.repeat.key = key;
@@ -1687,6 +1695,8 @@ static void terminal_config(char *key, char *val)
 		term.cfg.col = cfg_num(val, 10, 1, 1000);
 	else if (strcmp(key, "scrollback") == 0)
 		term.cfg.scrollback = cfg_num(val, 10, 0, INT_MAX);
+	else if (strcmp(key, "scroll to bottom on input") == 0)
+		term.cfg.scroll_to_bottom_on_input = strcmp(val, "yes") == 0;
 }
 
 static void font_config(char *key, char *val)
