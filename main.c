@@ -1799,6 +1799,11 @@ static FILE *open_config(void)
 
 	dir = getenv("XDG_CONFIG_HOME");
 	if (dir && *dir != '\0') {
+		snprintf(path, sizeof(path), "%s/havoc/%s", dir, CONF_FILE);
+		f = fopen(path, "r");
+		if (f)
+			return f;
+
 		snprintf(path, sizeof(path), "%s/%s", dir, CONF_FILE);
 		f = fopen(path, "r");
 		if (f)
@@ -1807,6 +1812,11 @@ static FILE *open_config(void)
 
 	dir = getenv("HOME");
 	if (dir && *dir != '\0') {
+		snprintf(path, sizeof(path), "%s/.config/havoc/%s", dir, CONF_FILE);
+		f = fopen(path, "r");
+		if (f)
+			return f;
+
 		snprintf(path, sizeof(path), "%s/.config/%s", dir, CONF_FILE);
 		f = fopen(path, "r");
 		if (f)
