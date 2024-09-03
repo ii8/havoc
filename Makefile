@@ -4,7 +4,7 @@ WAYLAND_SCANNER := wayland-scanner
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 
-VERSION="0.5.0-git"
+VERSION="0.6.0"
 
 CFLAGS ?= -Wall -Wextra -Wno-unused-parameter -Wno-parentheses -Wno-format-overflow
 override CFLAGS += -DVERSION=\"$(VERSION)\"

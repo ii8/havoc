@@ -1283,6 +1283,9 @@ static struct wl_pointer_listener ptr_listener = {
 #ifdef WL_POINTER_AXIS_VALUE120_SINCE_VERSION
 	noop,
 #endif
+#ifdef WL_POINTER_AXIS_RELATIVE_DIRECTION_SINCE_VERSION
+	noop,
+#endif
 };
 
 static void seat_capabilities(void *data, struct wl_seat *seat, uint32_t caps)
