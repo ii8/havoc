@@ -95,7 +95,18 @@ static struct {
 	struct wl_keyboard *kbd;
 	struct wl_pointer *ptr;
 	wl_fixed_t ptr_x, ptr_y;
-	int select;
+
+	enum {
+		SS_RESET,
+		SS_ANCHORED,
+		SS_DRAGGING,
+		SS_ACTIVE
+	} selection;
+
+	struct {
+		int count;
+		int x, y;
+	} click;
 
 	struct {
 		struct wl_cursor_theme *theme;
@@ -483,6 +494,7 @@ static void handle_paste(int ev)
 
 		if (term.cfg.scroll_to_bottom_on_input)
 			tsm_screen_sb_reset(term.screen);
+
 		term.need_redraw = true;
 		term.paste.len += len;
 		while (term.paste.len > 0) {
@@ -874,7 +886,7 @@ static uint32_t action_copy_serial;
 static void action_copy(void)
 {
 	d_uncopy();
-	if (term.select == 3)
+	if (term.selection == SS_ACTIVE)
 		d_copy(action_copy_serial);
 }
 
@@ -1159,12 +1171,33 @@ static void ps_uncopy(void)
 
 static inline int grid_x(void)
 {
-	return (wl_fixed_to_double(term.ptr_x) - term.margin.left) / term.cwidth;
+	int x = (wl_fixed_to_double(term.ptr_x) - term.margin.left) / term.cwidth;
+
+	if (x < 0)
+		return 0;
+
+	if (x >= term.col)
+		return term.col - 1;
+
+	return x;
 }
 
 static inline int grid_y(void)
 {
-	return (wl_fixed_to_double(term.ptr_y) - term.margin.top) / term.cheight;
+	int y = (wl_fixed_to_double(term.ptr_y) - term.margin.top) / term.cheight;
+
+	if (y < 0)
+		return 0;
+
+	if (y >= term.row)
+		return term.row - 1;
+
+	return y;
+}
+
+static void selection_start(enum tsm_screen_selection_mode mode)
+{
+	tsm_screen_selection_start(term.screen, mode, grid_x(), grid_y());
 }
 
 static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
@@ -1190,16 +1223,20 @@ static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
 	term.ptr_x = x;
 	term.ptr_y = y;
 
-	switch (term.select) {
-	case 1:
+	switch (term.selection) {
+	case SS_ANCHORED:
 		ps_uncopy();
-		term.select = 2;
-		tsm_screen_selection_start(term.screen, grid_x(), grid_y());
+		term.selection = SS_DRAGGING;
+		selection_start(TSM_SM_CHAR);
 		term.need_redraw = true;
 		break;
-	case 2:
+	case SS_DRAGGING:
 		tsm_screen_selection_target(term.screen, grid_x(), grid_y());
 		term.need_redraw = true;
+		break;
+	case SS_RESET:
+	case SS_ACTIVE:
+		break;
 	}
 
 	if (term.cursor.current == NULL && term.cursor.text)
@@ -1213,18 +1250,44 @@ static void ptr_button(void *data, struct wl_pointer *wl_pointer,
 	if (button == 0x110) {
 		switch (state) {
 		case WL_POINTER_BUTTON_STATE_PRESSED:
-			if (term.select == 3) {
+			if (term.selection == SS_ACTIVE) {
 				tsm_screen_selection_reset(term.screen);
 				term.need_redraw = true;
 			}
-			term.select = 1;
+			term.selection = SS_ANCHORED;
+
+			if (term.click.count > 0
+			    && term.click.x == grid_x()
+			    && term.click.y == grid_y()) {
+				++term.click.count;
+			} else {
+				term.click.count = 1;
+				term.click.x = grid_x();
+				term.click.y = grid_y();
+			}
+
+			if (term.click.count >= 2) {
+				ps_uncopy();
+				if (term.click.count == 2) {
+					selection_start(TSM_SM_WORD);
+				}
+				if (term.click.count == 3) {
+					selection_start(TSM_SM_LINE);
+					term.click.count = 0;
+				}
+				term.selection = SS_DRAGGING;
+				term.need_redraw = true;
+			}
 			break;
 		case WL_POINTER_BUTTON_STATE_RELEASED:
-			if (term.select == 2) {
+			if (term.selection == SS_ANCHORED) {
+				term.selection = SS_RESET;
+			}
+
+			if (term.selection == SS_DRAGGING) {
 				ps_copy(serial);
-				term.select = 3;
-			} else {
-				term.select = 0;
+				tsm_screen_selection_finish(term.screen);
+				term.selection = SS_ACTIVE;
 			}
 		}
 	} else if (button == 0x112 &&
@@ -1248,6 +1311,7 @@ static void ptr_axis(void *data, struct wl_pointer *wl_pointer,
 		tsm_screen_sb_down(term.screen, v);
 	else
 		tsm_screen_sb_up(term.screen, -v);
+
 	term.need_redraw = true;
 }
 

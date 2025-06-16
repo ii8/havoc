@@ -253,7 +253,7 @@ static void link_to_scrollback(struct tsm_screen *con, struct line *line)
 	++con->sb_count;
 }
 
-static void screen_scroll_up(struct tsm_screen *con, int num)
+static void screen_scroll_up_(struct tsm_screen *con, int num)
 {
 	int i, j, max, pos;
 	int ret;
@@ -274,8 +274,8 @@ static void screen_scroll_up(struct tsm_screen *con, int num)
 	 * 128 seems to be a sane limit that should never be reached but should
 	 * also be small enough so we do not get stack overflows. */
 	if (num > 128) {
-		screen_scroll_up(con, 128);
-		return screen_scroll_up(con, num - 128);
+		screen_scroll_up_(con, 128);
+		return screen_scroll_up_(con, num - 128);
 	}
 	struct line *cache[num];
 
@@ -319,7 +319,7 @@ static void screen_scroll_up(struct tsm_screen *con, int num)
 				con->sel_start.y = SELECTION_TOP;
 			}
 		}
-		if (!con->sel_end.line && con->sel_end.y >= 0) {
+		if (con->sel_finished && !con->sel_end.line && con->sel_end.y >= 0) {
 			con->sel_end.y -= num;
 			if (con->sel_end.y < 0) {
 				con->sel_end.line = con->sb_last;
@@ -331,7 +331,13 @@ static void screen_scroll_up(struct tsm_screen *con, int num)
 	}
 }
 
-static void screen_scroll_down(struct tsm_screen *con, int num)
+static void screen_scroll_up(struct tsm_screen *con, int num)
+{
+	screen_scroll_up_(con, num);
+	tsm_screen_selection_retarget(con);
+}
+
+static void screen_scroll_down_(struct tsm_screen *con, int num)
 {
 	int i, j, max;
 
@@ -347,8 +353,8 @@ static void screen_scroll_down(struct tsm_screen *con, int num)
 
 	/* see screen_scroll_up() for an explanation */
 	if (num > 128) {
-		screen_scroll_down(con, 128);
-		return screen_scroll_down(con, num - 128);
+		screen_scroll_down_(con, 128);
+		return screen_scroll_down_(con, num - 128);
 	}
 	struct line *cache[num];
 
@@ -374,9 +380,15 @@ static void screen_scroll_down(struct tsm_screen *con, int num)
 	if (con->sel_active) {
 		if (!con->sel_start.line && con->sel_start.y >= 0)
 			con->sel_start.y += num;
-		if (!con->sel_end.line && con->sel_end.y >= 0)
+		if (con->sel_finished && !con->sel_end.line && con->sel_end.y >= 0)
 			con->sel_end.y += num;
 	}
+}
+
+static void screen_scroll_down(struct tsm_screen *con, int num)
+{
+	screen_scroll_down_(con, num);
+	tsm_screen_selection_retarget(con);
 }
 
 static void screen_write(struct tsm_screen *con, int x, int y, tsm_symbol_t ch,
@@ -836,15 +848,17 @@ void tsm_screen_sb_up(struct tsm_screen *con, int num)
 	while (num--) {
 		if (con->sb_pos) {
 			if (!con->sb_pos->prev)
-				return;
+				break;
 
 			con->sb_pos = con->sb_pos->prev;
 		} else if (!con->sb_last) {
-			return;
+			break;
 		} else {
 			con->sb_pos = con->sb_last;
 		}
 	}
+
+	tsm_screen_selection_retarget(con);
 }
 
 SHL_EXPORT
@@ -861,8 +875,10 @@ void tsm_screen_sb_down(struct tsm_screen *con, int num)
 		if (con->sb_pos)
 			con->sb_pos = con->sb_pos->next;
 		else
-			return;
+			break;
 	}
+
+	tsm_screen_selection_retarget(con);
 }
 
 SHL_EXPORT
@@ -896,6 +912,9 @@ bool tsm_screen_sb_reset(struct tsm_screen *con)
 	con->age = con->age_cnt;
 
 	con->sb_pos = NULL;
+
+	tsm_screen_selection_retarget(con);
+
 	return true;
 }
 

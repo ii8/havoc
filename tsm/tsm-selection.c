@@ -55,14 +55,47 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "libtsm.h"
 #include "libtsm-int.h"
 #include "shl-llog.h"
 
 #define LLOG_SUBSYSTEM "tsm-selection"
 
-static void selection_set(struct tsm_screen *con, struct selection_pos *sel,
-			  int x, int y)
+static bool anchor_first(struct tsm_screen *con)
+{
+	if (!con->sel_start.line && con->sel_start.y == SELECTION_TOP) {
+		return true;
+	} else if (!con->sel_end.line && con->sel_end.y == SELECTION_TOP) {
+		return false;
+	} else if (con->sel_start.line && con->sel_end.line) {
+		if (con->sel_start.line->sb_id < con->sel_end.line->sb_id) {
+			return true;
+		} else if (con->sel_start.line->sb_id > con->sel_end.line->sb_id) {
+			return false;
+		} else if (con->sel_start.x < con->sel_end.x) {
+			return true;
+		} else {
+			return false;
+		}
+	} else if (con->sel_start.line) {
+		return true;
+	} else if (con->sel_end.line) {
+		return false;
+	} else if (con->sel_start.y < con->sel_end.y) {
+		return true;
+	} else if (con->sel_start.y > con->sel_end.y) {
+		return false;
+	} else if (con->sel_start.x < con->sel_end.x) {
+		return true;
+	} else {
+		return false;
+	}
+}
+
+static struct line *selection_set(struct tsm_screen *con,
+				  struct selection_pos *sel,
+				  int x, int y)
 {
 	struct line *pos;
 
@@ -74,11 +107,82 @@ static void selection_set(struct tsm_screen *con, struct selection_pos *sel,
 		pos = pos->next;
 	}
 
-	if (pos)
-		sel->line = pos;
-
 	sel->x = x;
 	sel->y = y;
+
+	if (pos) {
+		sel->line = pos;
+		return sel->line;
+	}
+
+	if (y < con->line_num)
+		return con->lines[y];
+
+	return NULL;
+}
+
+static bool wordend(tsm_symbol_t ch)
+{
+	if (ch == 0)
+		return true;
+
+	if (ch >= 128)
+		return false;
+
+	return isspace(ch) || strchr("(){}[],;", ch);
+}
+
+static void selection_adjust(struct tsm_screen *con, struct line *line)
+{
+	struct line *anchor_line, *target_line;
+	struct selection_pos *l, *r;
+	struct line *ll, *rl;
+
+	if (con->sel_mode == TSM_SM_CHAR)
+		return;
+
+	anchor_line = con->sel_start.line;
+	if (anchor_line == NULL)
+		anchor_line = con->lines[con->sel_start.y];
+
+	target_line = line;
+
+	if (anchor_line == NULL || target_line == NULL)
+		return;
+
+	if (anchor_first(con)) {
+		l = &con->sel_start;
+		ll = anchor_line;
+		r = &con->sel_end;
+		rl = target_line;
+	} else {
+		l = &con->sel_end;
+		ll = target_line;
+		r = &con->sel_start;
+		rl = anchor_line;
+	}
+
+	switch (con->sel_mode) {
+	case TSM_SM_CHAR:
+		break;
+	case TSM_SM_WORD:
+		while (l->x > 0) {
+			if (wordend(ll->cells[l->x - 1].ch))
+				break;
+			l->x -= 1;
+		}
+
+		while (r->x + 1 < con->size_x) {
+			if (wordend(rl->cells[r->x + 1].ch))
+				break;
+			r->x += 1;
+		}
+		break;
+	case TSM_SM_LINE:
+		l->x = 0;
+		r->x = con->size_x - 1;
+		break;
+	}
 }
 
 SHL_EXPORT
@@ -92,25 +196,53 @@ void tsm_screen_selection_reset(struct tsm_screen *con)
 }
 
 SHL_EXPORT
-void tsm_screen_selection_start(struct tsm_screen *con, int posx, int posy)
+void tsm_screen_selection_start(struct tsm_screen *con,
+				enum tsm_screen_selection_mode mode,
+				int posx, int posy)
 {
+	struct line *line;
+
 	screen_inc_age(con);
 	/* TODO: more sophisticated ageing */
 	con->age = con->age_cnt;
 
+	con->sel_mode = mode;
 	con->sel_active = true;
-	selection_set(con, &con->sel_start, posx, posy);
+	con->sel_finished = false;
+	con->sel_target_x = posx;
+	con->sel_target_y = posy;
+	line = selection_set(con, &con->sel_start, posx, posy);
 	memcpy(&con->sel_end, &con->sel_start, sizeof(con->sel_end));
+	selection_adjust(con, line);
 }
 
 SHL_EXPORT
 void tsm_screen_selection_target(struct tsm_screen *con, int posx, int posy)
 {
+	struct line *line;
 	screen_inc_age(con);
 	/* TODO: more sophisticated ageing */
 	con->age = con->age_cnt;
 
-	selection_set(con, &con->sel_end, posx, posy);
+	line = selection_set(con, &con->sel_end, posx, posy);
+	selection_adjust(con, line);
+
+	con->sel_target_x = posx;
+	con->sel_target_y = posy;
+}
+
+SHL_EXPORT
+void tsm_screen_selection_finish(struct tsm_screen *con)
+{
+	con->sel_finished = true;
+}
+
+void tsm_screen_selection_retarget(struct tsm_screen *con)
+{
+	if (con->sel_active && !con->sel_finished)
+		tsm_screen_selection_target(con,
+					    con->sel_target_x,
+					    con->sel_target_y);
 }
 
 /* TODO: tsm_ucs4_to_utf8 expects UCS4 characters, but a cell contains a
@@ -150,38 +282,8 @@ int tsm_screen_selection_copy(struct tsm_screen *con, char **out)
 			*out = str;
 			return 0;
 		}
-		start = &con->sel_start;
-		end = &con->sel_end;
-	} else if (!con->sel_end.line && con->sel_end.y == SELECTION_TOP) {
-		start = &con->sel_end;
-		end = &con->sel_start;
-	} else if (con->sel_start.line && con->sel_end.line) {
-		if (con->sel_start.line->sb_id < con->sel_end.line->sb_id) {
-			start = &con->sel_start;
-			end = &con->sel_end;
-		} else if (con->sel_start.line->sb_id > con->sel_end.line->sb_id) {
-			start = &con->sel_end;
-			end = &con->sel_start;
-		} else if (con->sel_start.x < con->sel_end.x) {
-			start = &con->sel_start;
-			end = &con->sel_end;
-		} else {
-			start = &con->sel_end;
-			end = &con->sel_start;
-		}
-	} else if (con->sel_start.line) {
-		start = &con->sel_start;
-		end = &con->sel_end;
-	} else if (con->sel_end.line) {
-		start = &con->sel_end;
-		end = &con->sel_start;
-	} else if (con->sel_start.y < con->sel_end.y) {
-		start = &con->sel_start;
-		end = &con->sel_end;
-	} else if (con->sel_start.y > con->sel_end.y) {
-		start = &con->sel_end;
-		end = &con->sel_start;
-	} else if (con->sel_start.x < con->sel_end.x) {
+	}
+	if (anchor_first(con)) {
 		start = &con->sel_start;
 		end = &con->sel_end;
 	} else {

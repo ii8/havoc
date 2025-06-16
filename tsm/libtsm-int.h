@@ -147,8 +147,12 @@ struct tsm_screen {
 
 	/* selection */
 	bool sel_active;
+	bool sel_finished;
+	enum tsm_screen_selection_mode sel_mode;
 	struct selection_pos sel_start;
 	struct selection_pos sel_end;
+	int sel_target_x;
+	int sel_target_y;
 };
 
 void screen_cell_init(struct tsm_screen *con, struct cell *cell,
@@ -157,6 +161,8 @@ void screen_cell_init(struct tsm_screen *con, struct cell *cell,
 void tsm_screen_set_opts(struct tsm_screen *scr, unsigned int opts);
 void tsm_screen_reset_opts(struct tsm_screen *scr, unsigned int opts);
 unsigned int tsm_screen_get_opts(struct tsm_screen *scr);
+
+void tsm_screen_selection_retarget(struct tsm_screen *scr);
 
 static inline void screen_inc_age(struct tsm_screen *con)
 {

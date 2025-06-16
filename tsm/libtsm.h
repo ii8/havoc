@@ -201,9 +201,17 @@ void tsm_screen_erase_screen_to_cursor(struct tsm_screen *con, bool protect);
 void tsm_screen_erase_cursor_to_screen(struct tsm_screen *con, bool protect);
 void tsm_screen_erase_screen(struct tsm_screen *con, bool protect);
 
+enum tsm_screen_selection_mode {
+	TSM_SM_CHAR,
+	TSM_SM_WORD,
+	TSM_SM_LINE,
+};
 void tsm_screen_selection_reset(struct tsm_screen *con);
-void tsm_screen_selection_start(struct tsm_screen *con, int posx, int posy);
+void tsm_screen_selection_start(struct tsm_screen *con,
+				enum tsm_screen_selection_mode mode,
+				int posx, int posy);
 void tsm_screen_selection_target(struct tsm_screen *con, int posx, int posy);
+void tsm_screen_selection_finish(struct tsm_screen *con);
 int tsm_screen_selection_copy(struct tsm_screen *con, char **out);
 
 tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
