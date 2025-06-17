@@ -585,7 +585,7 @@ SHL_EXPORT
 int tsm_screen_resize(struct tsm_screen *con, int x, int y)
 {
 	struct line **cache;
-	int i, j, width, diff, start;
+	int i, width, diff;
 	int ret;
 	bool *tab_ruler;
 	struct tsm_screen_attr *main_attr, *alt_attr;
@@ -673,30 +673,6 @@ int tsm_screen_resize(struct tsm_screen *con, int x, int y)
 	}
 
 	screen_inc_age(con);
-
-	/* clear expansion/padding area */
-	start = x;
-	if (x > con->size_x)
-		start = con->size_x;
-	for (j = 0; j < con->line_num; ++j) {
-		/* main-lines may go into SB, so clear all cells */
-		i = 0;
-		if (j < con->size_y)
-			i = start;
-
-		for ( ; i < con->main_lines[j]->size; ++i)
-			screen_cell_init(con, &con->main_lines[j]->cells[i],
-					 main_attr);
-
-		/* alt-lines never go into SB, only clear visible cells */
-		i = 0;
-		if (j < con->size_y)
-			i = con->size_x;
-
-		for ( ; i < x; ++i)
-			screen_cell_init(con, &con->alt_lines[j]->cells[i],
-					 alt_attr);
-	}
 
 	/* xterm destroys margins on resize, so do we */
 	con->margin_top = 0;
