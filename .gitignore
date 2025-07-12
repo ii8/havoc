@@ -1,6 +1,6 @@
 *.o
 *.a
-xdg-shell.[ch]
-xdg-decoration-unstable-v1.[ch]
-primary-selection-unstable-v1.[ch]
+xdg-shell.*
+xdg-decoration-unstable-v1.*
+primary-selection-unstable-v1.*
 havoc

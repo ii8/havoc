@@ -342,8 +342,8 @@ static void write_safe(struct tsm_vte *vte, const char *u8, size_t len)
 	if (vte->pasting) {
 		if (*u8 == ENDPASTE[vte->endpaste_i]) {
 			if (ENDPASTE[++vte->endpaste_i] == '\0') {
-				llog_warning(vte, "ignoring ESC[201~ escape "
-						  "sequence in pasted text");
+				fprintf(stderr, "ignoring ESC[201~ escape "
+						"sequence in pasted text");
 				vte->endpaste_i = 0;
 			}
 			return;
@@ -1092,7 +1092,7 @@ static void csi_attribute(struct tsm_vte *vte)
 			if (vte->csi_argv[i + 1] == 5) {
 				if (i + 2 >= vte->csi_argc ||
 					vte->csi_argv[i + 2] < 0) {
-					llog_debug(vte, "invalid 256color SGR");
+					fprintf(stderr, "invalid 256color SGR");
 					break;
 				}
 				code = vte->csi_argv[i + 2];
@@ -1118,7 +1118,7 @@ static void csi_attribute(struct tsm_vte *vte)
 					vte->csi_argv[i + 2] < 0 ||
 					vte->csi_argv[i + 3] < 0 ||
 					vte->csi_argv[i + 4] < 0) {
-						llog_debug(vte, "invalid true color SGR");
+						fprintf(stderr, "invalid true color SGR");
 						break;
 					}
 				cr = vte->csi_argv[i + 2];
@@ -1127,7 +1127,7 @@ static void csi_attribute(struct tsm_vte *vte)
 				code = -1;
 				i += 4;
 			} else {
-				llog_debug(vte, "invalid SGR");
+				fprintf(stderr, "invalid SGR");
 				break;
 			}
 			if (val == 38) {

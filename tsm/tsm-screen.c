@@ -275,7 +275,8 @@ static void screen_scroll_up_(struct tsm_screen *con, int num)
 	 * also be small enough so we do not get stack overflows. */
 	if (num > 128) {
 		screen_scroll_up_(con, 128);
-		return screen_scroll_up_(con, num - 128);
+		screen_scroll_up_(con, num - 128);
+		return;
 	}
 	struct line *cache[num];
 
@@ -354,7 +355,8 @@ static void screen_scroll_down_(struct tsm_screen *con, int num)
 	/* see screen_scroll_up() for an explanation */
 	if (num > 128) {
 		screen_scroll_down_(con, 128);
-		return screen_scroll_down_(con, num - 128);
+		screen_scroll_down_(con, num - 128);
+		return;
 	}
 	struct line *cache[num];
 
@@ -401,7 +403,7 @@ static void screen_write(struct tsm_screen *con, int x, int y, tsm_symbol_t ch,
 		return;
 
 	if (x >= con->size_x || y >= con->size_y) {
-		llog_warning(con, "writing beyond buffer boundary");
+		fprintf(stderr, "writing beyond buffer boundary");
 		return;
 	}
 

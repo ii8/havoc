@@ -1,47 +1,84 @@
-WAYLAND_PROTOCOLS_DIR != pkg-config --variable=pkgdatadir wayland-protocols
-WAYLAND_SCANNER := wayland-scanner
+VERSION = "0.6.0-git"
 
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 
-VERSION="0.6.0-git"
+PKG_CONFIG ?= pkg-config
+WAYLAND_SCANNER ?= wayland-scanner
 
-CFLAGS ?= -Wall -Wextra -Wno-unused-parameter -Wno-parentheses -Wno-format-overflow
-override CFLAGS += -DVERSION=\"$(VERSION)\"
+CFLAGS ?= -g -O2
+CDEFS = -DVERSION='$(VERSION)' -D_XOPEN_SOURCE=700
 
-VPATH = $(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell \
-	$(WAYLAND_PROTOCOLS_DIR)/unstable/xdg-decoration \
-	$(WAYLAND_PROTOCOLS_DIR)/unstable/primary-selection
+WAYLAND_PROTOCOLS_DIR != $(PKG_CONFIG) --variable=pkgdatadir wayland-protocols
 
-GEN =	xdg-shell.h xdg-shell.c \
-	xdg-decoration-unstable-v1.h xdg-decoration-unstable-v1.c \
-	primary-selection-unstable-v1.h primary-selection-unstable-v1.c
+LIBRARIES = wayland-client wayland-cursor xkbcommon
+PKG_CFLAGS != $(PKG_CONFIG) --cflags $(LIBRARIES)
+PKG_LIBS != $(PKG_CONFIG) --libs $(LIBRARIES)
 
-LIBS=-lrt -lm -lutil -lwayland-client -lwayland-cursor -lxkbcommon -Ltsm -lhtsm
-OBJ=xdg-shell.o xdg-decoration-unstable-v1.o primary-selection-unstable-v1.o glyph.o main.o
+LIBS = -lm -lutil $(PKG_LIBS)
 
-havoc: tsm $(OBJ)
+XML = \
+	xdg-shell.xml \
+	xdg-decoration-unstable-v1.xml \
+	primary-selection-unstable-v1.xml
+
+GEN = \
+	xdg-shell.h \
+	xdg-shell.c \
+	xdg-decoration-unstable-v1.h \
+	xdg-decoration-unstable-v1.c \
+	primary-selection-unstable-v1.h \
+	primary-selection-unstable-v1.c
+
+OBJ = \
+	main.o \
+	glyph.o \
+	xdg-shell.o \
+	xdg-decoration-unstable-v1.o \
+	primary-selection-unstable-v1.o \
+	tsm/wcwidth.o \
+	tsm/shl-htable.o \
+	tsm/tsm-render.o \
+	tsm/tsm-screen.o \
+	tsm/tsm-selection.o \
+	tsm/tsm-unicode.o \
+	tsm/tsm-vte-charsets.o \
+	tsm/tsm-vte.o
+
+.SUFFIXES:
+.SUFFIXES: .xml .h .c .o
+
+havoc: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
-
-install: havoc
-	install -D -t $(DESTDIR)$(BINDIR) havoc
-
-uninstall:
-	rm -f $(DESTDIR)$(BINDIR)/havoc
-
-clean:
-	$(MAKE) -C tsm clean
-	rm -f havoc $(GEN) $(OBJ)
 
 $(OBJ): $(GEN)
 
-%.c: %.xml
+.c.o:
+	$(CC) $(PKG_CFLAGS) $(CFLAGS) $(CDEFS) -c $< -o $@
+
+.xml.c:
 	$(WAYLAND_SCANNER) private-code < $< > $@
 
-%.h: %.xml
+.xml.h:
 	$(WAYLAND_SCANNER) client-header < $< > $@
 
-tsm:
-	$(MAKE) -C $@
+xdg-shell.xml:
+	cp $(WAYLAND_PROTOCOLS_DIR)/stable/xdg-shell/$@ $@
 
-.PHONY: install uninstall clean tsm
+xdg-decoration-unstable-v1.xml:
+	cp $(WAYLAND_PROTOCOLS_DIR)/unstable/xdg-decoration/$@ $@
+
+primary-selection-unstable-v1.xml:
+	cp $(WAYLAND_PROTOCOLS_DIR)/unstable/primary-selection/$@ $@
+
+install: havoc
+	mkdir -p $(DESTDIR)$(BINDIR)
+	install -m 755 havoc $(DESTDIR)$(BINDIR)/havoc
+
+uninstall:
+	rm $(DESTDIR)$(BINDIR)/havoc
+
+clean:
+	rm -f havoc $(XML) $(GEN) $(OBJ)
+
+.PHONY: install uninstall clean

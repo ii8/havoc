@@ -8,12 +8,12 @@
 #include <errno.h>
 #include <limits.h>
 #include <time.h>
+#include <poll.h>
 #include <sys/mman.h>
-#include <sys/epoll.h>
-#include <sys/timerfd.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <pty.h>
+#include "ptyutil.h"
 
 #include <xkbcommon/xkbcommon-compose.h>
 #include <wayland-client-core.h>
@@ -41,6 +41,13 @@ enum deco {
 	DECO_NONE
 };
 
+enum evfd {
+	EV_DISPLAY,
+	EV_TTY,
+	EV_PASTE,
+	NUM_POLLFDS,
+};
+
 static struct {
 	bool die;
 	bool configured;
@@ -48,7 +55,7 @@ static struct {
 	bool can_redraw;
 	int resize;
 
-	int fd, master_fd;
+	int master_fd;
 
 	struct wl_display *display;
 	struct wl_registry *registry;
@@ -119,12 +126,13 @@ static struct {
 	} cursor;
 
 	struct {
-		int fd;
+		int delay, interval;
+		int timeout;
+		long long start;
 		uint32_t key;
 		xkb_keysym_t sym;
 		uint32_t unicode;
 		void (*action)(void);
-		struct itimerspec its;
 	} repeat;
 
 	struct wl_data_device_manager *d_dm;
@@ -219,65 +227,51 @@ static struct {
 	.opt.app_id = "havoc"
 };
 
+#define fatal(s) { fprintf(stderr, s ": %s\n", strerror(errno)); abort(); }
+#define error(s) { fprintf(stderr, s ": %s\n", strerror(errno)); }
+
 static void wcb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
 {
 	assert(len <= PIPE_BUF);
-	if (term.master_fd >= 0 && write(term.master_fd, u8, len) < 0) {
-		fprintf(stderr, "could not write to pty master: %m\n");
-		abort();
-	}
+	if (term.master_fd >= 0 && write(term.master_fd, u8, len) < 0)
+		error("could not write to pty master");
 }
 
 static void handle_display(int ev)
 {
-	if (ev & EPOLLHUP) {
+	if (ev & POLLHUP) {
 		term.die = true;
-	} else if (ev & EPOLLIN) {
+	} else if (ev & POLLIN) {
 		if (wl_display_dispatch(term.display) < 0) {
-			fprintf(stderr, "could not dispatch events: %m\n");
-			abort();
+			error("could not dispatch events");
+			exit(EXIT_FAILURE);
 		}
 	}
 }
 
 static void handle_tty(int ev)
 {
-	char data[256];
-	int len;
+	int len = 0;
 
-	if (ev & EPOLLIN) {
+	if (ev & POLLIN) {
+		char data[256];
+
 		term.need_redraw = true;
 		len = read(term.master_fd, data, sizeof(data));
-		assert(len);
+
 		if (len < 0) {
-			fprintf(stderr, "could not read from pty: %m\n");
-			abort();
+			error("could not read from pty");
 		} else {
 			tsm_vte_input(term.vte, data, len);
 		}
-	} else if (ev & EPOLLHUP) {
-		epoll_ctl(term.fd, EPOLL_CTL_DEL, term.master_fd, NULL);
+	}
+
+	if (ev & POLLHUP && len == 0) {
 		close(term.master_fd);
 		term.master_fd = -1;
 		if (!term.opt.linger)
 			term.die = true;
 	}
-}
-
-static void handle_repeat(int ev)
-{
-	uint64_t exp;
-
-	if (read(term.repeat.fd, &exp, sizeof exp) < 0)
-		return;
-
-	if (term.repeat.action) {
-		term.repeat.action();
-		return;
-	}
-
-	tsm_vte_handle_keyboard(term.vte, term.repeat.sym, XKB_KEY_NoSymbol,
-				term.mods, term.repeat.unicode);
 }
 
 static long long now(void)
@@ -286,6 +280,34 @@ static long long now(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &t);
 	return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static void handle_repeat(void)
+{
+	int diff;
+
+	if (term.repeat.timeout < 0)
+		return;
+
+	diff = now() - term.repeat.start;
+	term.repeat.start += diff;
+
+	if (diff >= term.repeat.timeout) {
+		term.repeat.timeout += term.repeat.interval - diff;
+		if (term.repeat.timeout < 0)
+			term.repeat.timeout = 0;
+
+		if (term.repeat.action) {
+			term.repeat.action();
+			return;
+		}
+
+		tsm_vte_handle_keyboard(term.vte, term.repeat.sym,
+					XKB_KEY_NoSymbol, term.mods,
+					term.repeat.unicode);
+	} else {
+		term.repeat.timeout -= diff;
+	}
 }
 
 static void cursor_draw(int frame)
@@ -470,22 +492,22 @@ static int utf8_to_utf32(char const **utf8, size_t *len, uint32_t *r)
 static void end_paste(void)
 {
 	tsm_vte_paste_end(term.vte);
-	epoll_ctl(term.fd, EPOLL_CTL_DEL, term.paste.fd[0], NULL);
 	close(term.paste.fd[0]);
+	term.paste.fd[0] = -1;
 	term.paste.len = 0;
 	term.paste.active = false;
 }
 
 static void handle_paste(int ev)
 {
-	if (ev & EPOLLIN) {
+	if (ev & POLLIN) {
 		uint32_t code;
 		ssize_t len;
 		char const *p = &term.paste.buf[0];
 
 		len = read(term.paste.fd[0],
 			   term.paste.buf + term.paste.len,
-			   sizeof(term.paste.buf) - term.paste.len);
+			   sizeof term.paste.buf - term.paste.len);
 
 		if (len <= 0) {
 			end_paste();
@@ -505,17 +527,16 @@ static void handle_paste(int ev)
 			tsm_vte_handle_keyboard(term.vte, XKB_KEY_NoSymbol,
 						XKB_KEY_NoSymbol, 0, code);
 		}
-	} else if (ev & EPOLLHUP) {
+	} else if (ev & POLLHUP) {
 		end_paste();
 	}
 }
 
-static struct epcb {
-	void (*f)(int);
-} dfp = { handle_display }
-, tfp = { handle_tty }
-, rfp = { handle_repeat }
-, pfp = { handle_paste };
+static void (*pcb[NUM_POLLFDS])(int) = {
+	[EV_DISPLAY] = handle_display,
+	[EV_TTY] = handle_tty,
+	[EV_PASTE] = handle_paste,
+};
 
 static void buffer_release(void *data, struct wl_buffer *b)
 {
@@ -547,13 +568,13 @@ static int buffer_init(struct buffer *buf)
 	} while (fd < 0 && errno == EEXIST && --max);
 
 	if (fd < 0) {
-		fprintf(stderr, "shm_open failed: %m\n");
+		error("shm_open failed");
 		return -1;
 	}
 	shm_unlink(shm_name);
 
 	if (ftruncate(fd, buf->size) < 0) {
-		fprintf(stderr, "ftruncate failed: %m\n");
+		error("ftruncate failed");
 		close(fd);
 		return -1;
 	}
@@ -562,7 +583,7 @@ static int buffer_init(struct buffer *buf)
 			 fd, 0);
 
 	if (buf->data == MAP_FAILED) {
-		fprintf(stderr, "mmap failed: %m\n");
+		error("mmap failed");
 		close(fd);
 		return -1;
 	}
@@ -611,12 +632,13 @@ static struct buffer *swap_buffers(void)
 	return buf;
 }
 
-#define mul(a, b) (((a) * (b) + 255) >> 8)
-#define join(a, r, g, b) ((a) << 24 | (r) << 16 | (g) << 8 | (b))
+typedef uint8_t u8;
+typedef uint32_t u32;
 
-typedef uint_fast8_t uf8;
+#define mul(a, b) (((u32)(a) * (u32)(b) + 255) >> 8)
+#define join(a, r, g, b) ((u32)(a) << 24 | (u32)(r) << 16 | (u32)(g) << 8 | (u32)(b))
 
-static void blank(uint32_t *dst, int w, uf8 br, uf8 bg, uf8 bb, uf8 ba)
+static void blank(uint32_t *dst, int w, u8 br, u8 bg, u8 bb, u8 ba)
 {
 	int i;
 	uint32_t b;
@@ -633,9 +655,9 @@ static void blank(uint32_t *dst, int w, uf8 br, uf8 bg, uf8 bb, uf8 ba)
 }
 
 static void print(uint32_t *dst, int w,
-		  uf8 br, uf8 bg, uf8 bb,
-		  uf8 fr, uf8 fg, uf8 fb,
-		  uf8 ba, unsigned char *glyph)
+		  u8 br, u8 bg, u8 bb,
+		  u8 fr, u8 fg, u8 fb,
+		  u8 ba, unsigned char *glyph)
 {
 	int i;
 	int h = term.cheight;
@@ -647,17 +669,17 @@ static void print(uint32_t *dst, int w,
 	bb = mul(bb, ba);
 	while (h--) {
 		for (i = 0; i < w; ++i) {
-			uf8 fa = glyph[i];
+			u8 fa = glyph[i];
 			if (fa == 0) {
 				dst[i] = join(ba, br, bg, bb);
 			} else if (fa == 0xff) {
 				dst[i] = join(0xff, fr, fg, fb);
 			} else {
-				uf8 ca = 255 - fa;
+				u8 ca = 255 - fa;
 				dst[i] = join(fa + mul(ba, ca),
-					mul(fr, fa) + mul(br, ca),
-					mul(fg, fa) + mul(bg, ca),
-					mul(fb, fa) + mul(bb, ca));
+					      mul(fr, fa) + mul(br, ca),
+					      mul(fg, fa) + mul(bg, ca),
+					      mul(fb, fa) + mul(bb, ca));
 			}
 		}
 
@@ -666,16 +688,16 @@ static void print(uint32_t *dst, int w,
 	}
 }
 
-static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
-		     size_t len, int char_width, int x, int y,
-		     const struct tsm_screen_attr *a, tsm_age_t age,
-		     void *data)
+static void draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
+		      size_t len, int char_width, int x, int y,
+		      const struct tsm_screen_attr *a, tsm_age_t age,
+		      void *data)
 {
 	struct buffer *buffer = data;
 	uint32_t *dst = buffer->data;
 
 	if (age && age <= buffer->age)
-		return 0;
+		return;
 
 	dst += term.margin.top * term.width + term.margin.left;
 	dst = &dst[y * term.cheight * term.width + x * term.cwidth];
@@ -702,8 +724,6 @@ static int draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 			      a->fr, a->fg, a->fb,
 			      term.cfg.opacity, g);
 	}
-
-	return 0;
 }
 
 static void draw_margin(struct buffer *buffer)
@@ -777,8 +797,6 @@ static void redraw(void)
 
 static void paste(bool primary)
 {
-	struct epoll_event ee;
-
 	if (primary) {
 		if (!term.ps_dm || !term.paste.ps_mime)
 			return;
@@ -802,10 +820,6 @@ static void paste(bool primary)
 				      term.paste.fd[1]);
 	}
 	close(term.paste.fd[1]);
-
-	ee.events = EPOLLIN;
-	ee.data.ptr = &pfp;
-	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.paste.fd[0], &ee);
 
 	term.paste.active = true;
 	tsm_vte_paste_begin(term.vte);
@@ -892,11 +906,7 @@ static void action_copy(void)
 
 static void reset_repeat(void)
 {
-	struct itimerspec its = {
-		{ 0, 0 }, { 0, 0 }
-	};
-
-	timerfd_settime(term.repeat.fd, 0, &its, NULL);
+	term.repeat.timeout = -1;
 }
 
 static void setup_compose(void)
@@ -1064,7 +1074,8 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		term.repeat.sym = sym;
 		term.repeat.unicode = unicode;
 		term.repeat.action = action;
-		timerfd_settime(term.repeat.fd, 0, &term.repeat.its, NULL);
+		term.repeat.timeout = term.repeat.delay;
+		term.repeat.start = now();
 	}
 }
 
@@ -1095,16 +1106,11 @@ static void kbd_mods(void *data, struct wl_keyboard *k, uint32_t serial,
 static void kbd_repeat(void *data, struct wl_keyboard *k,
 		       int32_t rate, int32_t delay)
 {
-	if (rate == 0)
-		return;
-	else if (rate == 1)
-		term.repeat.its.it_interval.tv_sec = 1;
-	else
-		term.repeat.its.it_interval.tv_nsec = 1000000000 / rate;
+	if (rate > 1000)
+		rate = 1000;
 
-	term.repeat.its.it_value.tv_sec = delay / 1000;
-	delay -= term.repeat.its.it_value.tv_sec * 1000;
-	term.repeat.its.it_value.tv_nsec = delay * 1000 * 1000;
+	term.repeat.interval = rate > 0 ? 1000 / rate : -1;
+	term.repeat.delay = rate > 0 ? delay : -1;
 }
 
 static struct wl_keyboard_listener kbd_listener = {
@@ -1556,7 +1562,7 @@ static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
 	term.row = row;
 	tsm_screen_resize(term.screen, col, row);
 	if (term.master_fd >= 0 && ioctl(term.master_fd, TIOCSWINSZ, &ws) < 0)
-		fprintf(stderr, "could not resize pty: %m\n");
+		error("could not resize pty");
 
 	term.need_redraw = true;
 	term.resize = 2;
@@ -1643,7 +1649,7 @@ static void setup_pty(char *argv[])
 	pid_t pid = forkpty(&term.master_fd, NULL, NULL, NULL);
 
 	if (pid < 0) {
-		fprintf(stderr, "forkpty failed: %m");
+		fprintf(stderr, "forkpty failed: %s\n", strerror(errno));
 		exit(EXIT_FAILURE);
 	} else if (pid == 0) {
 		char *prog;
@@ -1655,7 +1661,12 @@ static void setup_pty(char *argv[])
 			execlp(term.cfg.shell, term.cfg.shell, (char *) NULL);
 			prog = term.cfg.shell;
 		}
-		fprintf(stderr, "could not execute %s: %m", prog);
+		fprintf(stderr, "could not execute %s: %s\n", prog,
+			strerror(errno));
+		fprintf(stderr, "running /bin/sh...\n");
+		execl("/bin/sh", "/bin/sh", (char *) NULL);
+		fprintf(stderr, "could not execute /bin/sh either: %s\n",
+			strerror(errno));
 		pause();
 		exit(EXIT_FAILURE);
 	}
@@ -1858,15 +1869,15 @@ static FILE *open_config(void)
 
 		f = fopen(term.opt.config, "r");
 		if (f == NULL)
-			fprintf(stderr, "could not open '%s': %m, "
+			fprintf(stderr, "could not open '%s': %s, "
 				"using default configuration\n",
-				term.opt.config);
+				term.opt.config, strerror(errno));
 		return f;
 	}
 
 	dir = getenv("XDG_CONFIG_HOME");
 	if (dir && *dir != '\0') {
-		snprintf(path, sizeof(path), "%s/havoc/%s", dir, CONF_FILE);
+		snprintf(path, sizeof path, "%s/havoc/%s", dir, CONF_FILE);
 		f = fopen(path, "r");
 		if (f)
 			return f;
@@ -1984,8 +1995,6 @@ static void usage(void)
 
 int main(int argc, char *argv[])
 {
-	int display_fd;
-	struct epoll_event ee[16];
 	int n, i, ret = 1;
 	struct binding *b;
 
@@ -2080,10 +2089,9 @@ retry:
 	wl_surface_commit(term.surf);
 	term.can_redraw = true;
 
-	term.repeat.fd = timerfd_create(CLOCK_MONOTONIC,
-					TFD_NONBLOCK | TFD_CLOEXEC);
-	if (term.repeat.fd < 0)
-		fail(etimer, "could not create key repeat timer: %m");
+	term.repeat.interval = -1;
+	term.repeat.delay = -1;
+	term.repeat.timeout = -1;
 
 	if (term.d_dm && term.seat) {
 		term.d_d = wl_data_device_manager_get_data_device(
@@ -2099,19 +2107,22 @@ retry:
 							     NULL);
 	}
 
-	display_fd = wl_display_get_fd(term.display);
-	term.fd = epoll_create1(EPOLL_CLOEXEC);
+	term.paste.fd[0] = -1;
 
-	ee[0].events = EPOLLIN;
-
-	ee[0].data.ptr = &dfp;
-	epoll_ctl(term.fd, EPOLL_CTL_ADD, display_fd, &ee[0]);
-
-	ee[0].data.ptr = &tfp;
-	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.master_fd, &ee[0]);
-
-	ee[0].data.ptr = &rfp;
-	epoll_ctl(term.fd, EPOLL_CTL_ADD, term.repeat.fd, &ee[0]);
+	struct pollfd pollfds[NUM_POLLFDS] = {
+		[EV_DISPLAY] = {
+			.fd = wl_display_get_fd(term.display),
+			.events = POLLIN,
+		},
+		[EV_TTY] = {
+			.fd = term.master_fd,
+			.events = POLLIN,
+		},
+		[EV_PASTE] = {
+			.fd = term.paste.fd[0],
+			.events = POLLIN,
+		},
+	};
 
 	while (!term.die) {
 		if (term.can_redraw && term.need_redraw && term.configured)
@@ -2119,13 +2130,21 @@ retry:
 
 		wl_display_flush(term.display);
 
-		n = epoll_wait(term.fd, ee, 16, -1);
-		for (i = 0; i < n; i++) {
-			void (*f)(int) = ((struct epcb *)ee[i].data.ptr)->f;
-			if (ee[i].events & EPOLLERR)
-				abort();
-			f(ee[i].events);
+		pollfds[EV_PASTE].fd = term.paste.fd[0];
+		n = poll(pollfds, NUM_POLLFDS, term.repeat.timeout);
+		if (n < 0) {
+			error("poll error");
+			abort();
 		}
+
+		for (i = 0; i < NUM_POLLFDS; i++) {
+			void (*f)(int) = pcb[i];
+
+			if (pollfds[i].revents & POLLERR)
+				abort();
+			f(pollfds[i].revents);
+		}
+		handle_repeat();
 	}
 
 	ret = 0;
@@ -2135,8 +2154,6 @@ retry:
 	if (term.cb)
 		wl_callback_destroy(term.cb);
 
-	close(term.repeat.fd);
-etimer:
 	if (term.d_d)
 		wl_data_device_release(term.d_d);
 	if (term.ps_d)

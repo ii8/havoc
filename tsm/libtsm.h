@@ -130,16 +130,16 @@ struct tsm_screen_attr {
 	unsigned int blink : 1;		/* blinking character */
 };
 
-typedef int (*tsm_screen_draw_cb) (struct tsm_screen *con,
-				   uint32_t id,
-				   const uint32_t *ch,
-				   size_t len,
-				   int width,
-				   int posx,
-				   int posy,
-				   const struct tsm_screen_attr *attr,
-				   tsm_age_t age,
-				   void *data);
+typedef void (*tsm_screen_draw_cb) (struct tsm_screen *con,
+				    uint32_t id,
+				    const uint32_t *ch,
+				    size_t len,
+				    int width,
+				    int posx,
+				    int posy,
+				    const struct tsm_screen_attr *attr,
+				    tsm_age_t age,
+				    void *data);
 
 int tsm_screen_new(struct tsm_screen **out);
 void tsm_screen_ref(struct tsm_screen *con);

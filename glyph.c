@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <errno.h>
 
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -122,7 +123,7 @@ static uint32_t find_table(uint8_t *data, uint32_t fontstart, const char *tag)
 	for (i = 0; i < num_tables; ++i) {
 		uint8_t *loc = data + (tabledir + 16 * i);
 
-		if (*(uint32_t *)(loc) == *(uint32_t *)tag)
+		if (strncmp((char *)loc, tag, 4) == 0)
 			return read_ulong(loc + 8);
 	}
 
@@ -319,8 +320,8 @@ static int close_shape(struct vertex *vertices, int n,
 {
 	if (start_off) {
 		if (was_off)
-			vinit(&vertices[n++], VCURVE, cx + scx >> 1,
-			      cy + scy >> 1, cx, cy);
+			vinit(&vertices[n++], VCURVE, (cx + scx) >> 1,
+			      (cy + scy) >> 1, cx, cy);
 		vinit(&vertices[n++], VCURVE, sx, sy, scx, scy);
 	} else {
 		if (was_off)
@@ -1516,12 +1517,14 @@ static void open_font(char *path)
 
 	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		fprintf(stderr, "could not open font file: %m\n");
+		fprintf(stderr, "could not open font file: %s\n",
+			strerror(errno));
 		goto err;
 	}
 
 	if (fstat(fd, &st) < 0) {
-		fprintf(stderr, "could not fstat font file: %m\n");
+		fprintf(stderr, "could not fstat font file: %s\n",
+			strerror(errno));
 		close(fd);
 		goto err;
 	}
@@ -1530,7 +1533,8 @@ static void open_font(char *path)
 	font.data = mmap(NULL, font.size, PROT_READ, MAP_PRIVATE, fd, 0);
 	close(fd);
 	if (font.data == MAP_FAILED) {
-		fprintf(stderr, "could not mmap font file: %m\n");
+		fprintf(stderr, "could not mmap font file: %s\n",
+			strerror(errno));
 		goto err;
 	}
 	font.mmapped = true;

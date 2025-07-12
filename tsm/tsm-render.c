@@ -50,7 +50,6 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 	struct line *iter, *line = NULL;
 	struct cell *cell, empty;
 	struct tsm_screen_attr attr;
-	int ret, warned = 0;
 	const uint32_t *ch;
 	size_t len;
 	bool in_sel = false, sel_start = false, sel_end = false;
@@ -163,16 +162,8 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 			    cell->ch == ' ' ||
 			    cell->ch == 0xA0)
 				len = 0;
-			ret = draw_cb(con, cell->ch, ch, len, cell->width,
-				      j, i, &attr, age, data);
-			if (ret && warned++ < 3) {
-				llog_debug(con,
-					   "cannot draw glyph at %ux%u via text-renderer",
-					   j, i);
-				if (warned == 3)
-					llog_debug(con,
-						   "suppressing further warnings during this rendering round");
-			}
+			draw_cb(con, cell->ch, ch, len, cell->width,
+				j, i, &attr, age, data);
 		}
 	}
 
