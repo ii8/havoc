@@ -31,10 +31,6 @@ int font_init(int, char *, int *, int *);
 void font_deinit(void);
 unsigned char *get_glyph(uint32_t, uint32_t, int);
 
-static void noop()
-{
-}
-
 enum deco {
 	DECO_AUTO,
 	DECO_SERVER,
@@ -346,7 +342,7 @@ static void cursor_frame_callback(void *data, struct wl_callback *cb,
 }
 
 static const struct wl_callback_listener cursor_frame_listener = {
-	cursor_frame_callback
+	.done = cursor_frame_callback,
 };
 
 static void cursor_request_frame_callback(void)
@@ -546,7 +542,7 @@ static void buffer_release(void *data, struct wl_buffer *b)
 }
 
 static const struct wl_buffer_listener buffer_listener = {
-	buffer_release
+	.release = buffer_release,
 };
 
 static int buffer_init(struct buffer *buf)
@@ -762,7 +758,7 @@ static void frame_callback(void *data, struct wl_callback *cb, uint32_t time)
 }
 
 static const struct wl_callback_listener frame_listener = {
-	frame_callback
+	.done = frame_callback,
 };
 
 static void redraw(void)
@@ -861,12 +857,12 @@ static void ds_action(void *data, struct wl_data_source *ds, uint32_t a)
 }
 
 static struct wl_data_source_listener ds_listener = {
-	ds_target,
-	ds_send,
-	ds_cancelled,
-	ds_dnd_drop_performed,
-	ds_dnd_finished,
-	ds_action
+	.target = ds_target,
+	.send = ds_send,
+	.cancelled = ds_cancelled,
+	.dnd_drop_performed = ds_dnd_drop_performed,
+	.dnd_finished = ds_dnd_finished,
+	.action = ds_action,
 };
 
 static void d_copy(uint32_t serial)
@@ -1114,12 +1110,12 @@ static void kbd_repeat(void *data, struct wl_keyboard *k,
 }
 
 static struct wl_keyboard_listener kbd_listener = {
-	kbd_keymap,
-	kbd_enter,
-	kbd_leave,
-	kbd_key,
-	kbd_mods,
-	kbd_repeat
+	.keymap = kbd_keymap,
+	.enter = kbd_enter,
+	.leave = kbd_leave,
+	.key = kbd_key,
+	.modifiers = kbd_mods,
+	.repeat_info = kbd_repeat,
 };
 
 static void pss_send(void *data,
@@ -1140,8 +1136,8 @@ static void pss_cancelled(void *data,
 }
 
 static struct zwp_primary_selection_source_v1_listener pss_listener = {
-	pss_send,
-	pss_cancelled
+	.send = pss_send,
+	.cancelled = pss_cancelled,
 };
 
 
@@ -1341,21 +1337,15 @@ static void ptr_axis_discrete(void *data, struct wl_pointer *wl_pointer,
 }
 
 static struct wl_pointer_listener ptr_listener = {
-	ptr_enter,
-	ptr_leave,
-	ptr_motion,
-	ptr_button,
-	ptr_axis,
-	ptr_frame,
-	ptr_axis_source,
-	ptr_axis_stop,
-	ptr_axis_discrete,
-#ifdef WL_POINTER_AXIS_VALUE120_SINCE_VERSION
-	noop,
-#endif
-#ifdef WL_POINTER_AXIS_RELATIVE_DIRECTION_SINCE_VERSION
-	noop,
-#endif
+	.enter = ptr_enter,
+	.leave = ptr_leave,
+	.motion = ptr_motion,
+	.button = ptr_button,
+	.axis = ptr_axis,
+	.frame = ptr_frame,
+	.axis_source = ptr_axis_source,
+	.axis_stop = ptr_axis_stop,
+	.axis_discrete = ptr_axis_discrete,
 };
 
 static void seat_capabilities(void *data, struct wl_seat *seat, uint32_t caps)
@@ -1383,8 +1373,8 @@ static void seat_name(void *data, struct wl_seat *seat, const char *name)
 }
 
 static const struct wl_seat_listener seat_listener = {
-	seat_capabilities,
-	seat_name
+	.capabilities = seat_capabilities,
+	.name = seat_name,
 };
 
 static void do_offer(void *d, struct wl_data_offer *o, const char *mime_type)
@@ -1405,9 +1395,9 @@ static void do_action(void *d, struct wl_data_offer *o, uint32_t dnd_action)
 }
 
 static const struct wl_data_offer_listener do_listener = {
-	do_offer,
-	do_source_actions,
-	do_action
+	.offer = do_offer,
+	.source_actions = do_source_actions,
+	.action = do_action,
 };
 
 static void dd_data_offer(void *data, struct wl_data_device *wl_data_device,
@@ -1450,12 +1440,12 @@ static void dd_selection(void *data, struct wl_data_device *wl_data_device,
 }
 
 static const struct wl_data_device_listener dd_listener = {
-	dd_data_offer,
-	dd_enter,
-	dd_leave,
-	dd_motion,
-	dd_drop,
-	dd_selection
+	.data_offer = dd_data_offer,
+	.enter = dd_enter,
+	.leave = dd_leave,
+	.motion = dd_motion,
+	.drop = dd_drop,
+	.selection = dd_selection,
 };
 
 static void pso_offer(void *data,
@@ -1470,7 +1460,7 @@ static void pso_offer(void *data,
 }
 
 static const struct zwp_primary_selection_offer_v1_listener pso_listener = {
-	pso_offer
+	.offer = pso_offer,
 };
 
 static void psd_data_offer(void *data,
@@ -1496,8 +1486,8 @@ static void psd_selection(void *data,
 }
 
 static const struct zwp_primary_selection_device_v1_listener psd_listener = {
-	psd_data_offer,
-	psd_selection
+	.data_offer = psd_data_offer,
+	.selection = psd_selection,
 };
 
 static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
@@ -1515,14 +1505,8 @@ static void toplvl_close(void *data, struct xdg_toplevel *t)
 }
 
 static const struct xdg_toplevel_listener toplvl_listener = {
-	toplvl_configure,
-	toplvl_close,
-#ifdef XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION
-	noop,
-#endif
-#ifdef XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION
-	noop,
-#endif
+	.configure = toplvl_configure,
+	.close = toplvl_close,
 };
 
 static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
@@ -1569,7 +1553,7 @@ static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
 }
 
 static const struct xdg_surface_listener surf_listener = {
-	configure
+	.configure = configure,
 };
 
 static void ping(void *data, struct xdg_wm_base *wm_base, uint32_t serial)
@@ -1578,7 +1562,7 @@ static void ping(void *data, struct xdg_wm_base *wm_base, uint32_t serial)
 }
 
 static const struct xdg_wm_base_listener wm_base_listener = {
-	ping
+	.ping = ping,
 };
 
 static void shm_format(void *data, struct wl_shm *shm, uint32_t format)
@@ -1588,7 +1572,7 @@ static void shm_format(void *data, struct wl_shm *shm, uint32_t format)
 }
 
 static const struct wl_shm_listener shm_listener = {
-	shm_format
+	.format = shm_format,
 };
 
 static void registry_get(void *data, struct wl_registry *r, uint32_t id,
@@ -1640,8 +1624,8 @@ static void registry_loose(void *data, struct wl_registry *r, uint32_t name)
 }
 
 static const struct wl_registry_listener reg_listener = {
-	registry_get,
-	registry_loose
+	.global = registry_get,
+	.global_remove = registry_loose,
 };
 
 static void setup_pty(char *argv[])
