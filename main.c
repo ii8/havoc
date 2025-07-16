@@ -21,9 +21,9 @@
 #include <wayland-cursor.h>
 
 #include "tsm/libtsm.h"
-#include "xdg-shell.h"
-#include "primary-selection-unstable-v1.h"
-#include "xdg-decoration-unstable-v1.h"
+#include "xdg-shell-client-protocol.h"
+#include "primary-selection-unstable-v1-client-protocol.h"
+#include "xdg-decoration-unstable-v1-client-protocol.h"
 
 #define ARRAY_LENGTH(a) (sizeof (a) / sizeof (a)[0])
 

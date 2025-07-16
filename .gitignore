@@ -3,4 +3,5 @@
 xdg-shell.*
 xdg-decoration-unstable-v1.*
 primary-selection-unstable-v1.*
+*-client-protocol.[ch]
 havoc

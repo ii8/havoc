@@ -23,11 +23,11 @@ XML = \
 	primary-selection-unstable-v1.xml
 
 GEN = \
-	xdg-shell.h \
+	xdg-shell-client-protocol.h \
 	xdg-shell.c \
-	xdg-decoration-unstable-v1.h \
+	xdg-decoration-unstable-v1-client-protocol.h \
 	xdg-decoration-unstable-v1.c \
-	primary-selection-unstable-v1.h \
+	primary-selection-unstable-v1-client-protocol.h \
 	primary-selection-unstable-v1.c
 
 OBJ = \
@@ -59,7 +59,7 @@ $(OBJ): $(GEN)
 .xml.c:
 	$(WAYLAND_SCANNER) private-code < $< > $@
 
-.xml.h:
+%-client-protocol.h: %.xml
 	$(WAYLAND_SCANNER) client-header < $< > $@
 
 xdg-shell.xml:
