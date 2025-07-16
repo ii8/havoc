@@ -1,19 +1,18 @@
 VERSION = "0.6.0-git"
 
-PREFIX ?= /usr/local
-BINDIR ?= $(PREFIX)/bin
+PREFIX = /usr/local
+BINDIR = $(PREFIX)/bin
 
-PKG_CONFIG ?= pkg-config
-WAYLAND_SCANNER ?= wayland-scanner
+PKG_CONFIG = pkg-config
+WAYLAND_SCANNER = wayland-scanner
 
-CFLAGS ?= -g -O2
 CDEFS = -DVERSION='$(VERSION)' -D_XOPEN_SOURCE=700
 
-WAYLAND_PROTOCOLS_DIR != $(PKG_CONFIG) --variable=pkgdatadir wayland-protocols
+WAYLAND_PROTOCOLS_DIR = $$($(PKG_CONFIG) --variable=pkgdatadir wayland-protocols)
 
 LIBRARIES = wayland-client wayland-cursor xkbcommon
-PKG_CFLAGS != $(PKG_CONFIG) --cflags $(LIBRARIES)
-PKG_LIBS != $(PKG_CONFIG) --libs $(LIBRARIES)
+PKG_CFLAGS = $$($(PKG_CONFIG) --cflags $(LIBRARIES))
+PKG_LIBS = $$($(PKG_CONFIG) --libs $(LIBRARIES))
 
 LIBS = -lm -lutil $(PKG_LIBS)
 
