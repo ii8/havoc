@@ -223,7 +223,6 @@ static struct {
 	.opt.app_id = "havoc"
 };
 
-#define fatal(s) { fprintf(stderr, s ": %s\n", strerror(errno)); abort(); }
 #define error(s) { fprintf(stderr, s ": %s\n", strerror(errno)); }
 
 static void wcb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
@@ -1633,7 +1632,7 @@ static void setup_pty(char *argv[])
 	pid_t pid = forkpty(&term.master_fd, NULL, NULL, NULL);
 
 	if (pid < 0) {
-		fprintf(stderr, "forkpty failed: %s\n", strerror(errno));
+		error("forkpty failed");
 		exit(EXIT_FAILURE);
 	} else if (pid == 0) {
 		char *prog;
@@ -2124,8 +2123,6 @@ retry:
 		for (i = 0; i < NUM_POLLFDS; i++) {
 			void (*f)(int) = pcb[i];
 
-			if (pollfds[i].revents & POLLERR)
-				abort();
 			f(pollfds[i].revents);
 		}
 		handle_repeat();
