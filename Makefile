@@ -1,4 +1,4 @@
-VERSION = "0.6.0-git"
+VERSION = "0.7.0"
 
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
