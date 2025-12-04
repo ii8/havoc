@@ -24,6 +24,8 @@
 #include "xdg-shell.h"
 #include "primary-selection-unstable-v1.h"
 #include "xdg-decoration-unstable-v1.h"
+#include "fractional-scale-v1.h"
+#include "viewporter.h"
 
 #define ARRAY_LENGTH(a) (sizeof (a) / sizeof (a)[0])
 
@@ -64,6 +66,10 @@ static struct {
 	struct wl_surface *surf;
 	struct xdg_surface *xdgsurf;
 	struct xdg_toplevel *toplvl;
+	struct wp_viewporter *vpm;
+	struct wp_viewport *vp;
+	struct wp_fractional_scale_manager_v1 *fsm;
+	struct wp_fractional_scale_v1 *fs;
 
 	struct buffer {
 		struct wl_buffer *b;
@@ -78,6 +84,7 @@ static struct {
 	int cwidth, cheight;
 	int width, height;
 	int confwidth, confheight;
+	int scale;
 	struct {
 		int top, left;
 	} margin;
@@ -621,7 +628,7 @@ static struct buffer *swap_buffers(void)
 	if (term.resize) {
 		buffer_unmap(buf);
 		if (buffer_init(buf) < 0)
-			abort();
+			fprintf(stderr, "buffer_init failed\n"), abort();
 	}
 
 	return buf;
@@ -1172,7 +1179,8 @@ static void ps_uncopy(void)
 
 static inline int grid_x(void)
 {
-	int x = (wl_fixed_to_double(term.ptr_x) - term.margin.left) / term.cwidth;
+	double dx = wl_fixed_to_double(term.ptr_x) - term.margin.left;
+	int x = dx * term.scale / (120 * term.cwidth);
 
 	if (x < 0)
 		return 0;
@@ -1185,7 +1193,8 @@ static inline int grid_x(void)
 
 static inline int grid_y(void)
 {
-	int y = (wl_fixed_to_double(term.ptr_y) - term.margin.top) / term.cheight;
+	double dy = wl_fixed_to_double(term.ptr_y) - term.margin.top;
+	int y = dy * term.scale / (120 * term.cheight);
 
 	if (y < 0)
 		return 0;
@@ -1489,13 +1498,54 @@ static const struct zwp_primary_selection_device_v1_listener psd_listener = {
 	.selection = psd_selection,
 };
 
-static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
-			     int32_t width, int32_t height,
-			     struct wl_array *state)
+static void fs_preferred_scale(void *data,
+			struct wp_fractional_scale_v1 *wp_fractional_scale_v1, uint32_t s)
 {
+	/* All s <= 0 ignored, and integral scale only if no viewporter protocol */
+	if (term.scale != s && s > 0) {
+		term.scale = term.vp ? s : (s + 119) / 120 * 120;
+		if (term.cheight)
+			font_deinit();
+		if (font_init((term.cfg.font_size * term.scale + 60)/120,
+		               term.cfg.font_path, &term.cwidth, &term.cheight) < 0) {
+			fprintf(stdout, "could not load font\n");
+			exit(1);
+		}
+	}
+}
+
+static const struct wp_fractional_scale_v1_listener fs_listener = {
+	.preferred_scale = fs_preferred_scale,
+};
+
+static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
+			     int32_t width, int32_t height, struct wl_array *state)
+{
+	if (!term.scale)
+		fs_preferred_scale(NULL, NULL, 240);
+
+	/* w x h = logical dimensions, s = fract scale, m = buffer scale */
+	wl_fixed_t f = wl_fixed_from_int(term.scale);
+	int s  = term.scale, m = (s + 119) / 120;
+	int cw = term.cwidth  * 120;
+	int ch = term.cheight * 120;
+	int w  = width > 0  ? width  : (term.cfg.col * cw + s - 1)/s;
+	int h  = height > 0 ? height : (term.cfg.row * ch + s - 1)/s;
+
+	w = w * s > cw * 2 ? w : cw * 2;
+	h = h * s > ch * 2 ? h : ch * 2;
+
+	/* Buffer must be an integral multiple of w & h dimensions */
+	term.confwidth  = w * m;
+	term.confheight = h * m;
 	term.configured = false;
-	term.confwidth = width ? width : term.cfg.col * term.cwidth;
-	term.confheight = height ? height : term.cfg.row * term.cheight;
+	wl_surface_set_buffer_scale(term.surf, m);
+	if (!term.vp)
+		return;
+
+	/* Draw source data only into subset of buffer for fractional scale */
+	wp_viewport_set_destination(term.vp, w, h);
+	wp_viewport_set_source(term.vp, 0, 0, w*f/(120*m), h*f/(120*m));
 }
 
 static void toplvl_close(void *data, struct xdg_toplevel *t)
@@ -1511,44 +1561,38 @@ static const struct xdg_toplevel_listener toplvl_listener = {
 static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
 {
 	xdg_surface_ack_configure(surf, serial);
-	int col = term.confwidth / term.cwidth;
-	int row = term.confheight / term.cheight;
+	int s  = term.scale, m = (s + 119) / 120;
+	int cw = term.cwidth  * 120;
+	int ch = term.cheight * 120;
+	int col = term.confwidth/m * s/cw;
+	int row = term.confheight/m * s/ch;
 	struct winsize ws = {
 		row, col, 0, 0
 	};
 
 	assert(!term.configured);
 	term.configured = true;
-
 	if (col == 0 || row == 0)
 		return;
 
 	if (term.width == term.confwidth && term.height == term.confheight)
 		return;
-
+	term.width = term.confwidth;
+	term.height = term.confheight;
 	if (term.cfg.margin) {
-		term.width = term.confwidth;
-		term.height = term.confheight;
-		term.margin.left = (term.width - col * term.cwidth) / 2;
-		term.margin.top = (term.height - row * term.cheight) / 2;
-		term.need_redraw = true;
-		term.resize = 2;
-	} else {
-		term.width = col * term.cwidth;
-		term.height = row * term.cheight;
+		term.margin.left = (term.confwidth/m  * s - col * cw) / (2*120);
+		term.margin.top  = (term.confheight/m * s - row * ch) / (2*120);
 	}
+	term.need_redraw = true;
+	term.resize = 2;
 
 	if (term.col == col && term.row == row)
 		return;
-
 	term.col = col;
 	term.row = row;
 	tsm_screen_resize(term.screen, col, row);
 	if (term.master_fd >= 0 && ioctl(term.master_fd, TIOCSWINSZ, &ws) < 0)
 		error("could not resize pty");
-
-	term.need_redraw = true;
-	term.resize = 2;
 }
 
 static const struct xdg_surface_listener surf_listener = {
@@ -1578,13 +1622,12 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 			 const char *i, uint32_t version)
 {
 	if (strcmp(i, "wl_compositor") == 0) {
-		term.cp = wl_registry_bind(r, id, &wl_compositor_interface, 1);
+		term.cp = wl_registry_bind(r, id, &wl_compositor_interface, 3);
 	} else if (strcmp(i, "wl_shm") == 0) {
 		term.shm = wl_registry_bind(r, id, &wl_shm_interface, 1);
 		wl_shm_add_listener(term.shm, &shm_listener, NULL);
 	} else if (strcmp(i, "xdg_wm_base") == 0) {
-		term.wm_base = wl_registry_bind(r, id, &xdg_wm_base_interface,
-						1);
+		term.wm_base = wl_registry_bind(r, id, &xdg_wm_base_interface, 1);
 		xdg_wm_base_add_listener(term.wm_base, &wm_base_listener, NULL);
 	} else if (strcmp(i, "wl_seat") == 0) {
 		term.seat = wl_registry_bind(r, id, &wl_seat_interface, 5);
@@ -1598,6 +1641,11 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "zxdg_decoration_manager_v1") == 0) {
 		term.deco.manager = wl_registry_bind(r, id,
 			&zxdg_decoration_manager_v1_interface, 1);
+	} else if (strcmp(i, "wp_viewporter") == 0) {
+		term.vpm = wl_registry_bind(r, id, &wp_viewporter_interface, 1);
+	} else if (strcmp(i, "wp_fractional_scale_manager_v1") == 0) {
+		term.fsm = wl_registry_bind(r, id,
+			&wp_fractional_scale_manager_v1_interface, 1);
 	}
 }
 
@@ -2015,10 +2063,6 @@ retry:
 
 #define fail(e, s) { fprintf(stderr, s "\n"); goto e; }
 
-	if (font_init(term.cfg.font_size, term.cfg.font_path,
-		      &term.cwidth, &term.cheight) < 0)
-		fail(efont, "could not load font");
-
 	term.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 	if (term.xkb_ctx == NULL)
 		fail(exkb, "failed to create xkb context");
@@ -2031,6 +2075,7 @@ retry:
 	wl_registry_add_listener(term.registry, &reg_listener, NULL);
 
 	wl_display_roundtrip(term.display);
+
 	if (!term.cp || !term.shm)
 		fail(eglobals, "missing required globals");
 	if (!term.wm_base)
@@ -2054,6 +2099,13 @@ retry:
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)
 		fail(esurf, "could not create surface");
+	if (term.fsm) {
+		term.fs = wp_fractional_scale_manager_v1_get_fractional_scale(term.fsm, term.surf);
+		wp_fractional_scale_v1_add_listener(term.fs, &fs_listener, NULL);
+	}
+	if (term.vpm) {
+		term.vp = wp_viewporter_get_viewport(term.vpm, term.surf);
+	}
 
 	term.xdgsurf = xdg_wm_base_get_xdg_surface(term.wm_base, term.surf);
 	if (term.xdgsurf == NULL)
@@ -2162,6 +2214,16 @@ evte:
 etsm:
 	cursor_free();
 eglobals:
+	if (term.cheight)
+		font_deinit();
+	if (term.vp)
+		wp_viewport_destroy(term.vp);
+	if (term.vpm)
+		wp_viewporter_destroy(term.vpm);
+	if (term.fs)
+		wp_fractional_scale_v1_destroy(term.fs);
+	if (term.fsm)
+		wp_fractional_scale_manager_v1_destroy(term.fsm);
 	if (term.ps_dm)
 		zwp_primary_selection_device_manager_v1_destroy(term.ps_dm);
 	if (term.d_dm)
@@ -2186,8 +2248,6 @@ econnect:
 	xkb_compose_state_unref(term.xkb_compose_state);
 	xkb_context_unref(term.xkb_ctx);
 exkb:
-	font_deinit();
-efont:
 	b = term.binding;
 	while (b) {
 		struct binding *tmp = b;
