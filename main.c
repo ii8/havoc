@@ -52,8 +52,8 @@ static struct {
 	bool need_redraw;
 	bool can_redraw;
 	int resize;
-
 	int master_fd;
+	uint32_t cp_id;  /* compositor id */
 
 	struct wl_display *display;
 	struct wl_registry *registry;
@@ -628,7 +628,7 @@ static struct buffer *swap_buffers(void)
 	if (term.resize) {
 		buffer_unmap(buf);
 		if (buffer_init(buf) < 0)
-			fprintf(stderr, "buffer_init failed\n"), abort();
+			abort();
 	}
 
 	return buf;
@@ -1179,8 +1179,8 @@ static void ps_uncopy(void)
 
 static inline int grid_x(void)
 {
-	double dx = wl_fixed_to_double(term.ptr_x) - term.margin.left;
-	int x = dx * term.scale / (120 * term.cwidth);
+	double sx = wl_fixed_to_double(term.ptr_x) * term.scale / 120;
+	int x = (sx - term.margin.left) / term.cwidth;
 
 	if (x < 0)
 		return 0;
@@ -1193,8 +1193,8 @@ static inline int grid_x(void)
 
 static inline int grid_y(void)
 {
-	double dy = wl_fixed_to_double(term.ptr_y) - term.margin.top;
-	int y = dy * term.scale / (120 * term.cheight);
+	double sy = wl_fixed_to_double(term.ptr_y) * term.scale / 120;
+	int y = (sy - term.margin.top) / term.cwidth;
 
 	if (y < 0)
 		return 0;
@@ -1511,6 +1511,8 @@ static void fs_preferred_scale(void *data,
 			fprintf(stdout, "could not load font\n");
 			exit(1);
 		}
+		if (term.surf)
+			wl_surface_commit(term.surf);  /* trigger toplvl_configure event */
 	}
 }
 
@@ -1522,7 +1524,7 @@ static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
 			     int32_t width, int32_t height, struct wl_array *state)
 {
 	if (!term.scale)
-		fs_preferred_scale(NULL, NULL, 240);
+		fs_preferred_scale(NULL, NULL, 120);
 
 	/* w x h = logical dimensions, s = fract scale, m = buffer scale */
 	wl_fixed_t f = wl_fixed_from_int(term.scale);
@@ -1532,20 +1534,25 @@ static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
 	int w  = width > 0  ? width  : (term.cfg.col * cw + s - 1)/s;
 	int h  = height > 0 ? height : (term.cfg.row * ch + s - 1)/s;
 
+	/* Logical dimensions >= 2 * font sz & snap to grid if no margin */
 	w = w * s > cw * 2 ? w : cw * 2;
 	h = h * s > ch * 2 ? h : ch * 2;
+	if (!term.cfg.margin) {
+		w = ((int) (w * s / cw) * cw + s - 1)/s;
+		h = ((int) (h * s / ch) * ch + s - 1)/s; /* s-1 => round fract px up */
+	}
 
 	/* Buffer must be an integral multiple of w & h dimensions */
 	term.confwidth  = w * m;
 	term.confheight = h * m;
 	term.configured = false;
-	wl_surface_set_buffer_scale(term.surf, m);
-	if (!term.vp)
-		return;
 
 	/* Draw source data only into subset of buffer for fractional scale */
-	wp_viewport_set_destination(term.vp, w, h);
-	wp_viewport_set_source(term.vp, 0, 0, w*f/(120*m), h*f/(120*m));
+	if (term.vp && term.surf) {
+		wl_surface_set_buffer_scale(term.surf, m);
+		wp_viewport_set_destination(term.vp, w, h);
+		wp_viewport_set_source(term.vp, 0, 0, w*f/(120*m), h*f/(120*m));
+	}
 }
 
 static void toplvl_close(void *data, struct xdg_toplevel *t)
@@ -1621,8 +1628,12 @@ static const struct wl_shm_listener shm_listener = {
 static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 			 const char *i, uint32_t version)
 {
+	struct wl_compositor *cp;
+	uint32_t cpid;
+
 	if (strcmp(i, "wl_compositor") == 0) {
-		term.cp = wl_registry_bind(r, id, &wl_compositor_interface, 3);
+		term.cp = wl_registry_bind(r, id, &wl_compositor_interface, 1);
+		term.cp_id = id;
 	} else if (strcmp(i, "wl_shm") == 0) {
 		term.shm = wl_registry_bind(r, id, &wl_shm_interface, 1);
 		wl_shm_add_listener(term.shm, &shm_listener, NULL);
@@ -1641,11 +1652,13 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "zxdg_decoration_manager_v1") == 0) {
 		term.deco.manager = wl_registry_bind(r, id,
 			&zxdg_decoration_manager_v1_interface, 1);
-	} else if (strcmp(i, "wp_viewporter") == 0) {
-		term.vpm = wl_registry_bind(r, id, &wp_viewporter_interface, 1);
 	} else if (strcmp(i, "wp_fractional_scale_manager_v1") == 0) {
 		term.fsm = wl_registry_bind(r, id,
 			&wp_fractional_scale_manager_v1_interface, 1);
+	} else if (strcmp(i, "wp_viewporter") == 0 && (cpid = term.cp_id) &&
+	          (cp = wl_registry_bind(r, cpid, &wl_compositor_interface, 3))) {
+		term.cp  = cp;
+		term.vpm = wl_registry_bind(r, id, &wp_viewporter_interface, 1);
 	}
 }
 
