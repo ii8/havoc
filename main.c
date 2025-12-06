@@ -28,6 +28,7 @@
 #include "viewporter.h"
 
 #define ARRAY_LENGTH(a) (sizeof (a) / sizeof (a)[0])
+#define MAX(a, b)       ((a) > (b) ? (a) : (b))
 
 int font_init(int, char *, int *, int *);
 void font_deinit(void);
@@ -84,7 +85,7 @@ static struct {
 	int cwidth, cheight;
 	int width, height;
 	int confwidth, confheight;
-	int scale;
+	int scale, confscale;
 	struct {
 		int top, left;
 	} margin;
@@ -1194,7 +1195,7 @@ static inline int grid_x(void)
 static inline int grid_y(void)
 {
 	double sy = wl_fixed_to_double(term.ptr_y) * term.scale / 120;
-	int y = (sy - term.margin.top) / term.cwidth;
+	int y = (sy - term.margin.top) / term.cheight;
 
 	if (y < 0)
 		return 0;
@@ -1502,17 +1503,8 @@ static void fs_preferred_scale(void *data,
 			struct wp_fractional_scale_v1 *wp_fractional_scale_v1, uint32_t s)
 {
 	/* All s <= 0 ignored, and integral scale only if no viewporter protocol */
-	if (term.scale != s && s > 0) {
-		term.scale = term.vp ? s : (s + 119) / 120 * 120;
-		if (term.cheight)
-			font_deinit();
-		if (font_init((term.cfg.font_size * term.scale + 60)/120,
-		               term.cfg.font_path, &term.cwidth, &term.cheight) < 0) {
-			fprintf(stdout, "could not load font\n");
-			exit(1);
-		}
-		if (term.surf)
-			wl_surface_commit(term.surf);  /* trigger toplvl_configure event */
+	if (term.confscale != s && s > 0) {
+		term.confscale = term.vp ? s : (s + 119) / 120 * 120;
 	}
 }
 
@@ -1523,20 +1515,25 @@ static const struct wp_fractional_scale_v1_listener fs_listener = {
 static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
 			     int32_t width, int32_t height, struct wl_array *state)
 {
-	if (!term.scale)
-		fs_preferred_scale(NULL, NULL, 120);
-
 	/* w x h = logical dimensions, s = fract scale, m = buffer scale */
-	wl_fixed_t f = wl_fixed_from_int(term.scale);
-	int s  = term.scale, m = (s + 119) / 120;
-	int cw = term.cwidth  * 120;
-	int ch = term.cheight * 120;
-	int w  = width > 0  ? width  : (term.cfg.col * cw + s - 1)/s;
-	int h  = height > 0 ? height : (term.cfg.row * ch + s - 1)/s;
+	int cw, ch, w, h;
+	int s = term.confscale ? term.confscale : 120, m = (s + 119) / 120;
+	if (term.scale != s) { 
+		term.scale = s;
+		if (term.cheight)
+			font_deinit();
+		if (font_init((term.cfg.font_size * s + 60)/120,
+		               term.cfg.font_path, &term.cwidth, &term.cheight) < 0) {
+			fprintf(stdout, "could not load font\n");
+			exit(1);
+		}
+	}
 
-	/* Logical dimensions >= 2 * font sz & snap to grid if no margin */
-	w = w * s > cw * 2 ? w : cw * 2;
-	h = h * s > ch * 2 ? h : ch * 2;
+	/* Logical dimensions >= 2*font sz & snap to grid if no margin */
+	cw = term.cwidth  * 120;
+	ch = term.cheight * 120;
+	w  = width  ? MAX(width,  2 * cw/s) : (term.cfg.col * cw + s - 1)/s;
+	h  = height ? MAX(height, 2 * ch/s) : (term.cfg.row * ch + s - 1)/s;
 	if (!term.cfg.margin) {
 		w = ((int) (w * s / cw) * cw + s - 1)/s;
 		h = ((int) (h * s / ch) * ch + s - 1)/s; /* s-1 => round fract px up */
@@ -1549,6 +1546,7 @@ static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
 
 	/* Draw source data only into subset of buffer for fractional scale */
 	if (term.vp && term.surf) {
+		wl_fixed_t f = wl_fixed_from_int(s);
 		wl_surface_set_buffer_scale(term.surf, m);
 		wp_viewport_set_destination(term.vp, w, h);
 		wp_viewport_set_source(term.vp, 0, 0, w*f/(120*m), h*f/(120*m));
@@ -1568,9 +1566,9 @@ static const struct xdg_toplevel_listener toplvl_listener = {
 static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
 {
 	xdg_surface_ack_configure(surf, serial);
-	int s  = term.scale, m = (s + 119) / 120;
-	int cw = term.cwidth  * 120;
-	int ch = term.cheight * 120;
+	int s   = term.scale, m = (s + 119) / 120;
+	int cw  = term.cwidth  * 120;
+	int ch  = term.cheight * 120;
 	int col = term.confwidth/m * s/cw;
 	int row = term.confheight/m * s/ch;
 	struct winsize ws = {
@@ -1579,10 +1577,9 @@ static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
 
 	assert(!term.configured);
 	term.configured = true;
-	if (col == 0 || row == 0)
-		return;
 
-	if (term.width == term.confwidth && term.height == term.confheight)
+	if (term.col == col && term.row == row &&
+		term.width == term.confwidth && term.height == term.confheight)
 		return;
 	term.width = term.confwidth;
 	term.height = term.confheight;
