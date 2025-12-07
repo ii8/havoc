@@ -1,4 +1,4 @@
-VERSION = "0.7.0"
+VERSION = "0.7.0-git"
 
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
@@ -20,7 +20,9 @@ LIBS = -lm -lutil $(PKG_LIBS)
 XML = \
 	xdg-shell.xml \
 	xdg-decoration-unstable-v1.xml \
-	primary-selection-unstable-v1.xml
+	primary-selection-unstable-v1.xml \
+	viewporter.xml \
+	fractional-scale-v1.xml
 
 GEN = \
 	xdg-shell.h \
@@ -28,7 +30,11 @@ GEN = \
 	xdg-decoration-unstable-v1.h \
 	xdg-decoration-unstable-v1.c \
 	primary-selection-unstable-v1.h \
-	primary-selection-unstable-v1.c
+	primary-selection-unstable-v1.c \
+	viewporter.h \
+	viewporter.c \
+	fractional-scale-v1.h \
+	fractional-scale-v1.c
 
 OBJ = \
 	main.o \
@@ -36,6 +42,8 @@ OBJ = \
 	xdg-shell.o \
 	xdg-decoration-unstable-v1.o \
 	primary-selection-unstable-v1.o \
+	viewporter.o \
+	fractional-scale-v1.o \
 	tsm/wcwidth.o \
 	tsm/shl-htable.o \
 	tsm/tsm-render.o \
@@ -70,6 +78,12 @@ xdg-decoration-unstable-v1.xml:
 
 primary-selection-unstable-v1.xml:
 	cp $(WAYLAND_PROTOCOLS_DIR)/unstable/primary-selection/$@ $@
+
+viewporter.xml:
+	cp $(WAYLAND_PROTOCOLS_DIR)/stable/viewporter/$@ $@
+
+fractional-scale-v1.xml:
+	cp $(WAYLAND_PROTOCOLS_DIR)/staging/fractional-scale/$@ $@
 
 install: havoc
 	mkdir -p $(DESTDIR)$(BINDIR)

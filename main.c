@@ -24,10 +24,13 @@
 #include "xdg-shell.h"
 #include "primary-selection-unstable-v1.h"
 #include "xdg-decoration-unstable-v1.h"
+#include "fractional-scale-v1.h"
+#include "viewporter.h"
 
 #define ARRAY_LENGTH(a) (sizeof (a) / sizeof (a)[0])
 
-int font_init(int, char *, int *, int *);
+int font_init(char *);
+void font_scale(int, int *, int *);
 void font_deinit(void);
 unsigned char *get_glyph(uint32_t, uint32_t, int);
 
@@ -64,6 +67,10 @@ static struct {
 	struct wl_surface *surf;
 	struct xdg_surface *xdgsurf;
 	struct xdg_toplevel *toplvl;
+	struct wp_viewporter *vpm;
+	struct wp_viewport *vp;
+	struct wp_fractional_scale_manager_v1 *fsm;
+	struct wp_fractional_scale_v1 *fs;
 
 	struct buffer {
 		struct wl_buffer *b;
@@ -76,7 +83,8 @@ static struct {
 
 	int col, row;
 	int cwidth, cheight;
-	int width, height;
+	int width, height, scale;
+	int pendingwidth, pendingheight;
 	int confwidth, confheight;
 	struct {
 		int top, left;
@@ -119,6 +127,7 @@ static struct {
 		struct wl_surface *surface;
 		struct wl_callback *callback;
 		uint32_t enter_serial;
+		struct wp_viewport *viewport;
 	} cursor;
 
 	struct {
@@ -190,6 +199,8 @@ static struct {
 		uint8_t colors[TSM_COLOR_NUM][3];
 	} cfg;
 } term = {
+	.scale = 120,
+
 	.cfg.shell = "/bin/sh",
 	.cfg.col = 80,
 	.cfg.row = 24,
@@ -305,6 +316,13 @@ static void handle_repeat(void)
 	}
 }
 
+static inline int destination(int bufsize)
+{
+	/* This does not work for all scales and buffer sizes because
+	 * wayland fractional scaling is currently broken unfortunately. */
+	return ((bufsize * 120) + (term.scale / 2)) / term.scale;
+}
+
 static void cursor_draw(int frame)
 {
 	struct wl_buffer *buffer;
@@ -317,13 +335,18 @@ static void cursor_draw(int frame)
 
 	image = term.cursor.current->images[frame];
 	buffer = wl_cursor_image_get_buffer(image);
+	if (term.cursor.viewport)
+		wp_viewport_set_destination(term.cursor.viewport,
+					    destination(image->width),
+					    destination(image->height));
 	wl_surface_attach(term.cursor.surface, buffer, 0, 0);
-	wl_surface_damage(term.cursor.surface, 0, 0,
-			  image->width, image->height);
+	wl_surface_damage_buffer(term.cursor.surface, 0, 0,
+				 image->width, image->height);
 	wl_surface_commit(term.cursor.surface);
 	wl_pointer_set_cursor(term.ptr, term.cursor.enter_serial,
 			      term.cursor.surface,
-			      image->hotspot_x, image->hotspot_y);
+			      destination(image->hotspot_x),
+			      destination(image->hotspot_y));
 }
 
 static void cursor_request_frame_callback(void);
@@ -387,11 +410,14 @@ hide:
 	wl_pointer_set_cursor(term.ptr, term.cursor.enter_serial, NULL, 0, 0);
 }
 
-static void cursor_init(void)
+static void cursor_load(void)
 {
 	int size = 32;
 	char *size_str = getenv("XCURSOR_SIZE");
 	struct wl_cursor *text = NULL;
+
+	if (term.cursor.surface == NULL)
+		return;
 
 	if (size_str && *size_str) {
 		char *end;
@@ -403,6 +429,10 @@ static void cursor_init(void)
 			size = s;
 	}
 
+	if (term.cursor.theme)
+		wl_cursor_theme_destroy(term.cursor.theme);
+
+	size = (size * term.scale + 60) / 120;
 	term.cursor.theme = wl_cursor_theme_load(getenv("XCURSOR_THEME"), size,
 						 term.shm);
 	if (term.cursor.theme == NULL)
@@ -414,14 +444,15 @@ static void cursor_init(void)
 	if (text == NULL)
 		text = wl_cursor_theme_get_cursor(term.cursor.theme, "xterm");
 
-	term.cursor.surface = wl_compositor_create_surface(term.cp);
-	if (term.cursor.surface == NULL) {
-		wl_cursor_theme_destroy(term.cursor.theme);
-		term.cursor.theme = NULL;
-		return;
-	}
-
 	term.cursor.text = text;
+}
+
+static void cursor_init(void)
+{
+	term.cursor.surface = wl_compositor_create_surface(term.cp);
+	if (term.cursor.surface && term.vpm && term.fsm)
+		term.cursor.viewport = wp_viewporter_get_viewport(
+			term.vpm, term.cursor.surface);
 }
 
 static void cursor_free(void)
@@ -619,6 +650,7 @@ static struct buffer *swap_buffers(void)
 	}
 
 	if (term.resize) {
+		--term.resize;
 		buffer_unmap(buf);
 		if (buffer_init(buf) < 0)
 			abort();
@@ -770,10 +802,12 @@ static void redraw(void)
 	}
 
 	wl_surface_attach(term.surf, buffer->b, 0, 0);
+	if (term.cfg.margin && buffer->age == 0)
+		draw_margin(buffer);
 	buffer->age = tsm_screen_draw(term.screen, draw_cell, buffer);
 	if (buffer->age == 0)
 		term.buf[0].age = term.buf[1].age = 0;
-	wl_surface_damage(term.surf, 0, 0, term.width, term.height);
+	wl_surface_damage_buffer(term.surf, 0, 0, term.width, term.height);
 
 	term.cb = wl_surface_frame(term.surf);
 	wl_callback_add_listener(term.cb, &frame_listener, NULL);
@@ -782,12 +816,6 @@ static void redraw(void)
 	buffer->busy = true;
 	term.can_redraw = false;
 	term.need_redraw = false;
-	if (term.resize) {
-		--term.resize;
-
-		if (term.cfg.margin)
-			draw_margin(buffer);
-	}
 }
 
 static void paste(bool primary)
@@ -1172,7 +1200,8 @@ static void ps_uncopy(void)
 
 static inline int grid_x(void)
 {
-	int x = (wl_fixed_to_double(term.ptr_x) - term.margin.left) / term.cwidth;
+	double px = (wl_fixed_to_double(term.ptr_x) * term.scale) / 120;
+	int x = (px - term.margin.left) / term.cwidth;
 
 	if (x < 0)
 		return 0;
@@ -1185,7 +1214,8 @@ static inline int grid_x(void)
 
 static inline int grid_y(void)
 {
-	int y = (wl_fixed_to_double(term.ptr_y) - term.margin.top) / term.cheight;
+	double py = (wl_fixed_to_double(term.ptr_y) * term.scale) / 120;
+	int y = (py - term.margin.top) / term.cheight;
 
 	if (y < 0)
 		return 0;
@@ -1489,13 +1519,115 @@ static const struct zwp_primary_selection_device_v1_listener psd_listener = {
 	.selection = psd_selection,
 };
 
+static void do_configure(void)
+{
+	int scaledwidth, scaledheight;
+	int newwidth, newheight;
+	int col, row;
+
+	if (term.confwidth)
+		scaledwidth = (term.confwidth * term.scale + 60) / 120;
+	else
+		scaledwidth = term.cfg.col * term.cwidth;
+
+	if (term.confheight)
+		scaledheight = (term.confheight * term.scale + 60) / 120;
+	else
+		scaledheight = term.cfg.row * term.cheight;
+
+	if (scaledwidth < term.cwidth)
+		scaledwidth = term.cwidth;
+	if (scaledheight < term.cheight)
+		scaledheight = term.cheight;
+
+	col = scaledwidth / term.cwidth;
+	row = scaledheight / term.cheight;
+
+	if (term.cfg.margin) {
+		newwidth = scaledwidth;
+		newheight = scaledheight;
+		term.margin.left = (newwidth - col * term.cwidth) / 2;
+		term.margin.top = (newheight - row * term.cheight) / 2;
+
+		if (term.vp && term.fs)
+			wp_viewport_set_destination(term.vp,
+						    term.confwidth
+						    ? term.confwidth
+						    : destination(newwidth),
+						    term.confheight
+						    ? term.confheight
+						    : destination(newheight));
+	} else {
+		newwidth = col * term.cwidth;
+		newheight = row * term.cheight;
+
+		if (term.vp && term.fs)
+			wp_viewport_set_destination(term.vp,
+						    destination(newwidth),
+						    destination(newheight));
+	}
+
+	if (term.width != newwidth || term.height != newheight) {
+		term.width = newwidth;
+		term.height = newheight;
+
+		term.resize = 2;
+		term.need_redraw = true;
+	}
+
+	if (term.col != col || term.row != row) {
+		struct winsize ws = {
+			row, col, 0, 0
+		};
+
+		term.col = col;
+		term.row = row;
+		tsm_screen_resize(term.screen, col, row);
+
+		if (term.master_fd >= 0) {
+			if (ioctl(term.master_fd, TIOCSWINSZ, &ws) < 0)
+				error("could not resize pty");
+		}
+		term.need_redraw = true;
+	}
+}
+
+static void rescale_font(void)
+{
+	font_scale((term.cfg.font_size * term.scale + 60) / 120,
+		   &term.cwidth, &term.cheight);
+
+	if (term.configured) {
+		do_configure();
+		term.buf[0].age = term.buf[1].age = 0;
+		term.need_redraw = true;
+	}
+}
+
+static void fs_preferred_scale(void *data, struct wp_fractional_scale_v1 *fs,
+			       uint32_t scale)
+{
+	int iscale = scale;
+
+	if (term.vp && iscale > 0 && term.scale != iscale) {
+		term.scale = iscale;
+		rescale_font();
+
+		if (term.cursor.theme)
+			cursor_load();
+	}
+}
+
+static const struct wp_fractional_scale_v1_listener fs_listener = {
+	.preferred_scale = fs_preferred_scale,
+};
+
 static void toplvl_configure(void *data, struct xdg_toplevel *xdg_toplevel,
 			     int32_t width, int32_t height,
 			     struct wl_array *state)
 {
-	term.configured = false;
-	term.confwidth = width ? width : term.cfg.col * term.cwidth;
-	term.confheight = height ? height : term.cfg.row * term.cheight;
+	term.pendingwidth = width;
+	term.pendingheight = height;
 }
 
 static void toplvl_close(void *data, struct xdg_toplevel *t)
@@ -1511,44 +1643,15 @@ static const struct xdg_toplevel_listener toplvl_listener = {
 static void configure(void *d, struct xdg_surface *surf, uint32_t serial)
 {
 	xdg_surface_ack_configure(surf, serial);
-	int col = term.confwidth / term.cwidth;
-	int row = term.confheight / term.cheight;
-	struct winsize ws = {
-		row, col, 0, 0
-	};
 
-	assert(!term.configured);
+	if (term.pendingwidth)
+		term.confwidth = term.pendingwidth;
+
+	if (term.pendingheight)
+		term.confheight = term.pendingheight;
+
+	do_configure();
 	term.configured = true;
-
-	if (col == 0 || row == 0)
-		return;
-
-	if (term.width == term.confwidth && term.height == term.confheight)
-		return;
-
-	if (term.cfg.margin) {
-		term.width = term.confwidth;
-		term.height = term.confheight;
-		term.margin.left = (term.width - col * term.cwidth) / 2;
-		term.margin.top = (term.height - row * term.cheight) / 2;
-		term.need_redraw = true;
-		term.resize = 2;
-	} else {
-		term.width = col * term.cwidth;
-		term.height = row * term.cheight;
-	}
-
-	if (term.col == col && term.row == row)
-		return;
-
-	term.col = col;
-	term.row = row;
-	tsm_screen_resize(term.screen, col, row);
-	if (term.master_fd >= 0 && ioctl(term.master_fd, TIOCSWINSZ, &ws) < 0)
-		error("could not resize pty");
-
-	term.need_redraw = true;
-	term.resize = 2;
 }
 
 static const struct xdg_surface_listener surf_listener = {
@@ -1578,7 +1681,7 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 			 const char *i, uint32_t version)
 {
 	if (strcmp(i, "wl_compositor") == 0) {
-		term.cp = wl_registry_bind(r, id, &wl_compositor_interface, 1);
+		term.cp = wl_registry_bind(r, id, &wl_compositor_interface, 4);
 	} else if (strcmp(i, "wl_shm") == 0) {
 		term.shm = wl_registry_bind(r, id, &wl_shm_interface, 1);
 		wl_shm_add_listener(term.shm, &shm_listener, NULL);
@@ -1598,6 +1701,11 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 	} else if (strcmp(i, "zxdg_decoration_manager_v1") == 0) {
 		term.deco.manager = wl_registry_bind(r, id,
 			&zxdg_decoration_manager_v1_interface, 1);
+	} else if (strcmp(i, "wp_viewporter") == 0) {
+		term.vpm = wl_registry_bind(r, id, &wp_viewporter_interface, 1);
+	} else if (strcmp(i, "wp_fractional_scale_manager_v1") == 0) {
+		term.fsm = wl_registry_bind(r, id,
+			&wp_fractional_scale_manager_v1_interface, 1);
 	}
 }
 
@@ -2015,9 +2123,9 @@ retry:
 
 #define fail(e, s) { fprintf(stderr, s "\n"); goto e; }
 
-	if (font_init(term.cfg.font_size, term.cfg.font_path,
-		      &term.cwidth, &term.cheight) < 0)
+	if (font_init(term.cfg.font_path) < 0)
 		fail(efont, "could not load font");
+	font_scale(term.cfg.font_size, &term.cwidth, &term.cheight);
 
 	term.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 	if (term.xkb_ctx == NULL)
@@ -2042,6 +2150,7 @@ retry:
 		fail(eglobals, "missing required ARGB8888 shm format");
 
 	cursor_init();
+	cursor_load();
 
 	if (tsm_screen_new(&term.screen) < 0)
 		fail(etsm, "failed to create tsm screen");
@@ -2066,6 +2175,15 @@ retry:
 	xdg_toplevel_add_listener(term.toplvl, &toplvl_listener, NULL);
 	xdg_toplevel_set_title(term.toplvl, "havoc");
 	xdg_toplevel_set_app_id(term.toplvl, term.opt.app_id);
+
+	if (term.vpm && term.fsm) {
+		term.vp = wp_viewporter_get_viewport(term.vpm, term.surf);
+		term.fs = wp_fractional_scale_manager_v1_get_fractional_scale(
+			term.fsm, term.surf);
+		if (term.vp && term.fs)
+			wp_fractional_scale_v1_add_listener(term.fs,
+							    &fs_listener, NULL);
+	}
 
 	setup_deco();
 
@@ -2162,6 +2280,14 @@ evte:
 etsm:
 	cursor_free();
 eglobals:
+	if (term.vp)
+		wp_viewport_destroy(term.vp);
+	if (term.vpm)
+		wp_viewporter_destroy(term.vpm);
+	if (term.fs)
+		wp_fractional_scale_v1_destroy(term.fs);
+	if (term.fsm)
+		wp_fractional_scale_manager_v1_destroy(term.fsm);
 	if (term.ps_dm)
 		zwp_primary_selection_device_manager_v1_destroy(term.ps_dm);
 	if (term.d_dm)

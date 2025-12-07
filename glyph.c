@@ -1554,10 +1554,8 @@ static void close_font(void)
 		munmap(font.data, font.size);
 }
 
-int font_init(int size, char *path, int *w, int *h)
+int font_init(char *path)
 {
-	int descent, linegap;
-
 	open_font(path);
 
 	if (setup(&font, 0) < 0) {
@@ -1566,6 +1564,16 @@ int font_init(int size, char *path, int *w, int *h)
 	}
 
 	font.num_metrics = read_ushort(font.data + font.hhea + 34);
+	font.cache = &leaf;
+
+	return 0;
+}
+
+void font_scale(int size, int *w, int *h)
+{
+	int descent, linegap;
+
+	delete_cache(font.cache);
 	font.cache = &leaf;
 
 	font.ascent = get_ascent(&font);
@@ -1582,8 +1590,6 @@ int font_init(int size, char *path, int *w, int *h)
 
 	*w = font.width;
 	*h = font.height;
-
-	return 0;
 }
 
 void font_deinit(void)

@@ -3,4 +3,6 @@
 xdg-shell.*
 xdg-decoration-unstable-v1.*
 primary-selection-unstable-v1.*
+viewporter.*
+fractional-scale-v1.*
 havoc
