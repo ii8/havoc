@@ -1811,6 +1811,19 @@ static void action_scroll_to_bottom(void)
 	term.need_redraw = true;
 }
 
+static void action_zoom_in(void)
+{
+	term.cfg.font_size += 1;
+	rescale_font();
+}
+
+static void action_zoom_out(void)
+{
+	term.cfg.font_size -= 1;
+	if (term.cfg.font_size < 2)
+		term.cfg.font_size = 2;
+	rescale_font();
+}
 
 static struct {
 	char *name;
@@ -1826,6 +1839,8 @@ static struct {
 	{ "scroll down page", &action_scroll_down_page },
 	{ "scroll to top", &action_scroll_to_top },
 	{ "scroll to bottom", &action_scroll_to_bottom },
+	{ "zoom in", &action_zoom_in },
+	{ "zoom out", &action_zoom_out },
 };
 
 #define CONF_FILE "havoc.cfg"
