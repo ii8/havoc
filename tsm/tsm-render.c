@@ -41,6 +41,55 @@
 
 #define LLOG_SUBSYSTEM "tsm-render"
 
+static void to_rgb(struct tsm_screen *con, struct tsm_screen_attr *attr)
+{
+	int16_t code;
+
+	code = attr->fccode;
+	switch (code) {
+	case TSM_COLOR_RGB:
+		break;
+	case TSM_COLOR_FOREGROUND:
+		attr->fr = con->foreground[0];
+		attr->fg = con->foreground[1];
+		attr->fb = con->foreground[2];
+		break;
+	case TSM_COLOR_BACKGROUND:
+		attr->fr = con->background[0];
+		attr->fg = con->background[1];
+		attr->fb = con->background[2];
+		break;
+	default:
+		/* bold causes light colors */
+		if (attr->bold && code < 8)
+			code += 8;
+
+		attr->fr = con->palette[code][0];
+		attr->fg = con->palette[code][1];
+		attr->fb = con->palette[code][2];
+	}
+
+	code = attr->bccode;
+	switch (code) {
+	case TSM_COLOR_RGB:
+		break;
+	case TSM_COLOR_FOREGROUND:
+		attr->br = con->foreground[0];
+		attr->bg = con->foreground[1];
+		attr->bb = con->foreground[2];
+		break;
+	case TSM_COLOR_BACKGROUND:
+		attr->br = con->background[0];
+		attr->bg = con->background[1];
+		attr->bb = con->background[2];
+		break;
+	default:
+		attr->br = con->palette[code][0];
+		attr->bg = con->palette[code][1];
+		attr->bb = con->palette[code][2];
+	}
+}
+
 SHL_EXPORT
 tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 			  void *data)
@@ -162,6 +211,7 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 			    cell->ch == ' ' ||
 			    cell->ch == 0xA0)
 				len = 0;
+			to_rgb(con, &attr);
 			draw_cb(con, cell->ch, ch, len, cell->width,
 				j, i, &attr, age, data);
 		}

@@ -1562,3 +1562,43 @@ void tsm_screen_erase_screen(struct tsm_screen *con, bool protect)
 			     protect);
 	con->vanguard = 0;
 }
+
+SHL_EXPORT
+void tsm_screen_set_color(struct tsm_screen *con, int c,
+			  uint8_t r, uint8_t g, uint8_t b)
+{
+	screen_inc_age(con);
+
+	switch (c) {
+	case TSM_COLOR_FOREGROUND:
+		con->foreground[0] = r;
+		con->foreground[1] = g;
+		con->foreground[2] = b;
+		break;
+	case TSM_COLOR_BACKGROUND:
+		con->background[0] = r;
+		con->background[1] = g;
+		con->background[2] = b;
+		break;
+	default:
+		con->palette[c][0] = r;
+		con->palette[c][1] = g;
+		con->palette[c][2] = b;
+	}
+	con->age = con->age_cnt;
+}
+
+SHL_EXPORT
+void tsm_screen_set_palette(struct tsm_screen *con, uint8_t palette[256][3])
+{
+	screen_inc_age(con);
+
+	memcpy(con->palette, palette, sizeof con->palette);
+	con->age = con->age_cnt;
+}
+
+SHL_EXPORT
+uint8_t *tsm_screen_get_background(struct tsm_screen *con)
+{
+	return con->background;
+}

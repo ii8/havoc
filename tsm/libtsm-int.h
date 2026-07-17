@@ -142,6 +142,11 @@ struct tsm_screen {
 	int cursor_x;			/* current cursor x-pos */
 	int cursor_y;			/* current cursor y-pos */
 
+	/* color palette */
+	uint8_t palette[256][3];
+	uint8_t foreground[3];
+	uint8_t background[3];
+
 	/* tab ruler */
 	bool *tab_ruler;		/* tab-flag for all cells of one row */
 

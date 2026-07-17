@@ -196,7 +196,6 @@ static struct {
 		enum deco decorations;
 		int font_size;
 		char font_path[512];
-		uint8_t colors[TSM_COLOR_NUM][3];
 	} cfg;
 } term = {
 	.scale = 120,
@@ -211,26 +210,6 @@ static struct {
 	.cfg.decorations = DECO_AUTO,
 	.cfg.font_size = 18,
 	.cfg.font_path = "",
-	.cfg.colors = {
-		[TSM_COLOR_BLACK]         = {   0,   0,   0 },
-		[TSM_COLOR_RED]           = { 205,   0,   0 },
-		[TSM_COLOR_GREEN]         = {   0, 205,   0 },
-		[TSM_COLOR_YELLOW]        = { 205, 205,   0 },
-		[TSM_COLOR_BLUE]          = {   0,   0, 238 },
-		[TSM_COLOR_MAGENTA]       = { 205,   0, 205 },
-		[TSM_COLOR_CYAN]          = {   0, 205, 205 },
-		[TSM_COLOR_LIGHT_GREY]    = { 229, 229, 229 },
-		[TSM_COLOR_DARK_GREY]     = { 127, 127, 127 },
-		[TSM_COLOR_LIGHT_RED]     = { 255,   0,   0 },
-		[TSM_COLOR_LIGHT_GREEN]   = {   0, 255,   0 },
-		[TSM_COLOR_LIGHT_YELLOW]  = { 255, 255,   0 },
-		[TSM_COLOR_LIGHT_BLUE]    = {  92,  92, 255 },
-		[TSM_COLOR_LIGHT_MAGENTA] = { 255,   0, 255 },
-		[TSM_COLOR_LIGHT_CYAN]    = {   0, 255, 255 },
-		[TSM_COLOR_WHITE]         = { 255, 255, 255 },
-		[TSM_COLOR_FOREGROUND]    = { 229, 229, 229 },
-		[TSM_COLOR_BACKGROUND]    = {   0,   0,   0 },
-	},
 	.opt.app_id = "havoc"
 };
 
@@ -757,7 +736,7 @@ static void draw_margin(struct buffer *buffer)
 {
 	uint32_t *dst = buffer->data;
 	uint8_t a = term.cfg.opacity;
-	uint8_t *rgb = term.cfg.colors[TSM_COLOR_BACKGROUND];
+	uint8_t *rgb = tsm_screen_get_background(term.screen);
 	uint32_t c = join(a, mul(rgb[0], a), mul(rgb[1], a), mul(rgb[2], a));
 	int inw = term.col * term.cwidth;
 	int inh = term.row * term.cheight;
@@ -1937,29 +1916,22 @@ static void bind_config(char *key, char *val)
 	term.binding = b;
 }
 
-static void set_color(enum tsm_vte_color field, uint32_t val)
-{
-	term.cfg.colors[field][2] = val;
-	term.cfg.colors[field][1] = val >> 8;
-	term.cfg.colors[field][0] = val >> 16;
-}
-
 static void color_config(char *key, char *val)
 {
-	uint32_t color = 0;
+	uint32_t c = 0;
 
 	if (*val == '#')
-		color = cfg_num(++val, 16, 0, 0xffffff);
+		c = cfg_num(++val, 16, 0, 0xffffff);
 
 	if (strcmp(key, "foreground") == 0) {
-		set_color(TSM_COLOR_FOREGROUND, color);
+		tsm_set_default_foreground(c >> 16, c >> 8, c);
 	} else if (strcmp(key, "background") == 0) {
-		set_color(TSM_COLOR_BACKGROUND, color);
+		tsm_set_default_background(c >> 16, c >> 8, c);
 	} else if (strstr(key, "color") == key && *(key + 5) != '\0') {
 		char *p;
 		long i = strtol(key + 5, &p, 10);
-		if (*p == '\0' && i >= 0 && i < 16)
-			set_color(i, color);
+		if (*p == '\0' && i >= 0 && i < 256)
+			tsm_set_default_color(i, c >> 16, c >> 8, c);
 	}
 }
 
@@ -2173,7 +2145,6 @@ retry:
 
 	if (tsm_vte_new(&term.vte, term.screen, wcb, NULL) < 0)
 		fail(evte, "failed to create tsm vte");
-	tsm_vte_set_palette(term.vte, term.cfg.colors);
 
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)

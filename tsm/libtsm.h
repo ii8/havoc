@@ -115,8 +115,8 @@ typedef uint_fast32_t tsm_age_t;
 #define TSM_SCREEN_ALTERNATE	0x40
 
 struct tsm_screen_attr {
-	int8_t fccode;			/* foreground color code or <0 for rgb */
-	int8_t bccode;			/* background color code or <0 for rgb */
+	int16_t fccode;			/* foreground color code */
+	int16_t bccode;			/* background color code */
 	uint8_t fr;			/* foreground red */
 	uint8_t fg;			/* foreground green */
 	uint8_t fb;			/* foreground blue */
@@ -260,8 +260,12 @@ int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
 void tsm_vte_ref(struct tsm_vte *vte);
 void tsm_vte_unref(struct tsm_vte *vte);
 
-#define TSM_COLOR_NUM 18
+#define TSM_COLOR_NUM 256
 enum tsm_vte_color {
+	TSM_COLOR_BACKGROUND = -3,
+	TSM_COLOR_FOREGROUND,
+	TSM_COLOR_RGB,
+
 	TSM_COLOR_BLACK,
 	TSM_COLOR_RED,
 	TSM_COLOR_GREEN,
@@ -278,12 +282,17 @@ enum tsm_vte_color {
 	TSM_COLOR_LIGHT_MAGENTA,
 	TSM_COLOR_LIGHT_CYAN,
 	TSM_COLOR_WHITE,
-
-	TSM_COLOR_FOREGROUND,
-	TSM_COLOR_BACKGROUND
 };
 
-int tsm_vte_set_palette(struct tsm_vte *vte, uint8_t (*palette)[3]);
+void tsm_set_default_color(int c, uint8_t r, uint8_t g, uint8_t b);
+void tsm_set_default_foreground(uint8_t r, uint8_t g, uint8_t b);
+void tsm_set_default_background(uint8_t r, uint8_t g, uint8_t b);
+
+void tsm_screen_set_color(struct tsm_screen *con, int c,
+			  uint8_t r, uint8_t g, uint8_t b);
+void tsm_screen_set_palette(struct tsm_screen *con, uint8_t palette[256][3]);
+uint8_t *tsm_screen_get_background(struct tsm_screen *con);
+
 void tsm_vte_get_def_attr(struct tsm_vte *vte, struct tsm_screen_attr *out);
 
 void tsm_vte_reset(struct tsm_vte *vte);

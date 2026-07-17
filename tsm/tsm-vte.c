@@ -50,6 +50,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "libtsm.h"
 #include "libtsm-int.h"
 #include "shl-llog.h"
@@ -114,6 +115,8 @@ enum parser_action {
 /* max CSI arguments */
 #define CSI_ARG_MAX 16
 
+#define OSC_BUFSIZE 256
+
 /* terminal flags */
 #define FLAG_CURSOR_KEY_MODE			0x00000001 /* DEC cursor key mode */
 #define FLAG_KEYPAD_APPLICATION_MODE		0x00000002 /* DEC keypad application mode; TODO: toggle on numlock? */
@@ -152,7 +155,6 @@ struct tsm_vte {
 	struct tsm_screen *con;
 	tsm_vte_write_cb write_cb;
 	void *data;
-	char *palette_name;
 
 	struct tsm_utf8_mach *mach;
 	unsigned long parse_cnt;
@@ -163,7 +165,9 @@ struct tsm_vte {
 	int csi_argv[CSI_ARG_MAX];
 	unsigned int csi_flags;
 
-	uint8_t (*palette)[3];
+	char osc_arg[OSC_BUFSIZE];
+	int osc_len;
+
 	struct tsm_screen_attr def_attr;
 	struct tsm_screen_attr cattr;
 	unsigned int flags;
@@ -185,62 +189,71 @@ struct tsm_vte {
 	int endpaste_i;
 };
 
-static uint8_t default_palette[TSM_COLOR_NUM][3] = {
-	[TSM_COLOR_BLACK]         = {   0,   0,   0 }, /* black */
-	[TSM_COLOR_RED]           = { 205,   0,   0 }, /* red */
-	[TSM_COLOR_GREEN]         = {   0, 205,   0 }, /* green */
-	[TSM_COLOR_YELLOW]        = { 205, 205,   0 }, /* yellow */
-	[TSM_COLOR_BLUE]          = {   0,   0, 238 }, /* blue */
-	[TSM_COLOR_MAGENTA]       = { 205,   0, 205 }, /* magenta */
-	[TSM_COLOR_CYAN]          = {   0, 205, 205 }, /* cyan */
-	[TSM_COLOR_LIGHT_GREY]    = { 229, 229, 229 }, /* light grey */
-	[TSM_COLOR_DARK_GREY]     = { 127, 127, 127 }, /* dark grey */
-	[TSM_COLOR_LIGHT_RED]     = { 255,   0,   0 }, /* light red */
-	[TSM_COLOR_LIGHT_GREEN]   = {   0, 255,   0 }, /* light green */
-	[TSM_COLOR_LIGHT_YELLOW]  = { 255, 255,   0 }, /* light yellow */
-	[TSM_COLOR_LIGHT_BLUE]    = {  92,  92, 255 }, /* light blue */
-	[TSM_COLOR_LIGHT_MAGENTA] = { 255,   0, 255 }, /* light magenta */
-	[TSM_COLOR_LIGHT_CYAN]    = {   0, 255, 255 }, /* light cyan */
-	[TSM_COLOR_WHITE]         = { 255, 255, 255 }, /* white */
+#define cube6(r, g) \
+	{ r, g, 0}, \
+	{ r, g, 95}, \
+	{ r, g, 135}, \
+	{ r, g, 175}, \
+	{ r, g, 215}, \
+	{ r, g, 255}
 
-	[TSM_COLOR_FOREGROUND]    = { 229, 229, 229 }, /* light grey */
-	[TSM_COLOR_BACKGROUND]    = {   0,   0,   0 }, /* black */
+#define cube36(r) \
+	cube6(r, 0), \
+	cube6(r, 95), \
+	cube6(r, 135), \
+	cube6(r, 175), \
+	cube6(r, 215), \
+	cube6(r, 255)
+
+#define gray(c) \
+	{ c, c, c }
+
+static uint8_t default_palette[256][3] = {
+	{   0,   0,   0 }, /* black */
+	{ 205,   0,   0 }, /* red */
+	{   0, 205,   0 }, /* green */
+	{ 205, 205,   0 }, /* yellow */
+	{   0,   0, 238 }, /* blue */
+	{ 205,   0, 205 }, /* magenta */
+	{   0, 205, 205 }, /* cyan */
+	{ 229, 229, 229 }, /* light grey */
+	{ 127, 127, 127 }, /* dark grey */
+	{ 255,   0,   0 }, /* light red */
+	{   0, 255,   0 }, /* light green */
+	{ 255, 255,   0 }, /* light yellow */
+	{  92,  92, 255 }, /* light blue */
+	{ 255,   0, 255 }, /* light magenta */
+	{   0, 255, 255 }, /* light cyan */
+	{ 255, 255, 255 }, /* white */
+
+	cube36(0),
+	cube36(95),
+	cube36(135),
+	cube36(175),
+	cube36(215),
+	cube36(255),
+
+	gray(8), gray(18), gray(28), gray(38),
+	gray(48), gray(58), gray(68), gray(78),
+	gray(88), gray(98), gray(108), gray(118),
+	gray(128), gray(138), gray(148), gray(158),
+	gray(168), gray(178), gray(188), gray(198),
+	gray(208), gray(218), gray(228), gray(238),
 };
+static uint8_t default_foreground[3] = { 229, 229, 229 };
+static uint8_t default_background[3] = { 0, 0, 0 };
 
-/* Several effects may occur when non-RGB colors are used. For instance, if bold
- * is enabled, then a dark color code is always converted to a light color to
- * simulate bold (even though bold may actually be supported!). To support this,
- * we need to differentiate between a set color-code and a set rgb-color.
- * This function actually converts a set color-code into an RGB color. This must
- * be called before passing the attribute to the console layer so the console
- * layer can always work with RGB values and does not have to care for color
- * codes. */
-static void to_rgb(struct tsm_vte *vte, struct tsm_screen_attr *attr)
+static void reset_colors(struct tsm_vte *vte)
 {
-	int8_t code;
-
-	code = attr->fccode;
-	if (code >= 0) {
-		/* bold causes light colors */
-		if (attr->bold && code < 8)
-			code += 8;
-		if (code >= TSM_COLOR_NUM)
-			code = TSM_COLOR_FOREGROUND;
-
-		attr->fr = vte->palette[code][0];
-		attr->fg = vte->palette[code][1];
-		attr->fb = vte->palette[code][2];
-	}
-
-	code = attr->bccode;
-	if (code >= 0) {
-		if (code >= TSM_COLOR_NUM)
-			code = TSM_COLOR_BACKGROUND;
-
-		attr->br = vte->palette[code][0];
-		attr->bg = vte->palette[code][1];
-		attr->bb = vte->palette[code][2];
-	}
+	tsm_screen_set_palette(vte->con, default_palette);
+	tsm_screen_set_color(vte->con, TSM_COLOR_FOREGROUND,
+			     default_foreground[0],
+			     default_foreground[1],
+			     default_foreground[2]);
+	tsm_screen_set_color(vte->con, TSM_COLOR_BACKGROUND,
+			     default_background[0],
+			     default_background[1],
+			     default_background[2]);
 }
 
 static void copy_fcolor(struct tsm_screen_attr *dest,
@@ -277,10 +290,9 @@ int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
 	vte->con = con;
 	vte->write_cb = write_cb;
 	vte->data = data;
-	vte->palette = default_palette;
+	reset_colors(vte);
 	vte->def_attr.fccode = TSM_COLOR_FOREGROUND;
 	vte->def_attr.bccode = TSM_COLOR_BACKGROUND;
-	to_rgb(vte, &vte->def_attr);
 
 	ret = tsm_utf8_mach_new(&vte->mach);
 	if (ret)
@@ -316,19 +328,27 @@ void tsm_vte_unref(struct tsm_vte *vte)
 }
 
 SHL_EXPORT
-int tsm_vte_set_palette(struct tsm_vte *vte, uint8_t (*palette)[3])
+void tsm_set_default_color(int c, uint8_t r, uint8_t g, uint8_t b)
 {
-	vte->palette = palette;
-	vte->def_attr.fccode = TSM_COLOR_FOREGROUND;
-	vte->def_attr.bccode = TSM_COLOR_BACKGROUND;
+	default_palette[c][0] = r;
+	default_palette[c][1] = g;
+	default_palette[c][2] = b;
+}
 
-	to_rgb(vte, &vte->def_attr);
-	memcpy(&vte->cattr, &vte->def_attr, sizeof(vte->cattr));
+SHL_EXPORT
+void tsm_set_default_foreground(uint8_t r, uint8_t g, uint8_t b)
+{
+	default_foreground[0] = r;
+	default_foreground[1] = g;
+	default_foreground[2] = b;
+}
 
-	tsm_screen_reset_def_attr(vte->con, &vte->def_attr);
-	tsm_screen_erase_screen(vte->con, false);
-
-	return 0;
+SHL_EXPORT
+void tsm_set_default_background(uint8_t r, uint8_t g, uint8_t b)
+{
+	default_background[0] = r;
+	default_background[1] = g;
+	default_background[2] = b;
 }
 
 SHL_EXPORT
@@ -343,7 +363,7 @@ static void write_safe(struct tsm_vte *vte, const char *u8, size_t len)
 		if (*u8 == ENDPASTE[vte->endpaste_i]) {
 			if (ENDPASTE[++vte->endpaste_i] == '\0') {
 				fprintf(stderr, "ignoring ESC[201~ escape "
-						"sequence in pasted text");
+						"sequence in pasted text\n");
 				vte->endpaste_i = 0;
 			}
 			return;
@@ -450,7 +470,6 @@ static void vte_write_fnkey(struct tsm_vte *vte, bool ss3, unsigned int mods,
 static void write_console(struct tsm_vte *vte, tsm_symbol_t sym)
 {
 	vte->last_sym = sym;
-	to_rgb(vte, &vte->cattr);
 	tsm_screen_write(vte->con, sym, &vte->cattr);
 }
 
@@ -488,7 +507,6 @@ static void restore_state(struct tsm_vte *vte)
 	tsm_screen_move_to(vte->con, vte->saved_state.cursor_x,
 			       vte->saved_state.cursor_y);
 	vte->cattr = vte->saved_state.cattr;
-	to_rgb(vte, &vte->cattr);
 	if (vte->flags & FLAG_BACKGROUND_COLOR_ERASE_MODE)
 		tsm_screen_set_def_attr(vte->con, &vte->cattr);
 	vte->gl = vte->saved_state.gl;
@@ -542,7 +560,6 @@ void tsm_vte_reset(struct tsm_vte *vte)
 	vte->g3 = &tsm_vte_unicode_upper;
 
 	memcpy(&vte->cattr, &vte->def_attr, sizeof(vte->cattr));
-	to_rgb(vte, &vte->cattr);
 	tsm_screen_reset_def_attr(vte->con, &vte->def_attr);
 
 	reset_state(vte);
@@ -678,6 +695,8 @@ static void do_clear(struct tsm_vte *vte)
 	for (i = 0; i < CSI_ARG_MAX; ++i)
 		vte->csi_argv[i] = -1;
 	vte->csi_flags = 0;
+
+	vte->osc_len = 0;
 }
 
 static void do_collect(struct tsm_vte *vte, uint32_t data)
@@ -717,6 +736,20 @@ static void do_collect(struct tsm_vte *vte, uint32_t data)
 		vte->csi_flags |= CSI_PCLOSE;
 		break;
 	}
+}
+
+static void do_osc_collect(struct tsm_vte *vte, uint32_t data)
+{
+	char buf[4];
+	int n = tsm_ucs4_to_utf8(data, buf);
+
+	if (vte->osc_len + n > sizeof(vte->osc_arg) - 1) {
+		fprintf(stderr, "OSC buffer overflow\n");
+		return;
+	}
+
+	memcpy(vte->osc_arg + vte->osc_len, buf, n);
+	vte->osc_len += n;
 }
 
 static void do_param(struct tsm_vte *vte, uint32_t data)
@@ -939,9 +972,8 @@ static void do_esc(struct tsm_vte *vte, uint32_t data)
 
 static void csi_attribute(struct tsm_vte *vte)
 {
-	static const uint8_t bval[6] = { 0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff };
 	int i, code, val;
-	uint8_t cr, cg, cb;
+	int cr, cg, cb;
 
 	if (vte->csi_argc <= 1 && vte->csi_argv[0] == -1) {
 		vte->csi_argc = 1;
@@ -1086,50 +1118,40 @@ static void csi_attribute(struct tsm_vte *vte)
 			vte->cattr.bccode = TSM_COLOR_WHITE;
 			break;
 		case 38:
-			/* fallthrough */
 		case 48:
+			if (i + 1 >= vte->csi_argc)
+				break;
+
 			val = vte->csi_argv[i];
 			if (vte->csi_argv[i + 1] == 5) {
-				if (i + 2 >= vte->csi_argc ||
-					vte->csi_argv[i + 2] < 0) {
-					fprintf(stderr, "invalid 256color SGR");
+				if (i + 2 >= vte->csi_argc)
 					break;
-				}
+
 				code = vte->csi_argv[i + 2];
-				if (code < 16) {
-				} else if (code < 232) {
-					code -= 16;
-					cb = bval[code % 6];
-					code /= 6;
-					cg = bval[code % 6];
-					code /= 6;
-					cr = bval[code % 6];
-					code = -1;
-				} else {
-					code = (code - 232) * 10 + 8;
-					cr = code;
-					cg = code;
-					cb = code;
-					code = -1;
-				}
+				if (code < 0 || code >= 256)
+					break;
+
 				i += 2;
 			} else if (vte->csi_argv[i + 1] == 2) {
-				if (i + 4 >= vte->csi_argc ||
-					vte->csi_argv[i + 2] < 0 ||
-					vte->csi_argv[i + 3] < 0 ||
-					vte->csi_argv[i + 4] < 0) {
-						fprintf(stderr, "invalid true color SGR");
-						break;
-					}
+				if (i + 4 >= vte->csi_argc)
+					break;
+
+				code = TSM_COLOR_RGB;
 				cr = vte->csi_argv[i + 2];
 				cg = vte->csi_argv[i + 3];
 				cb = vte->csi_argv[i + 4];
-				code = -1;
+				if (cr < 0 || cr >= 256 ||
+				    cg < 0 || cg >= 256 ||
+				    cb < 0 || cb >= 256) {
+					break;
+				}
+
 				i += 4;
 			} else {
-				fprintf(stderr, "invalid SGR");
+				fprintf(stderr, "unknown SGR\n");
 				break;
 			}
+
 			if (val == 38) {
 				vte->cattr.fccode = code;
 				vte->cattr.fr = cr;
@@ -1141,7 +1163,6 @@ static void csi_attribute(struct tsm_vte *vte)
 				vte->cattr.bg = cg;
 				vte->cattr.bb = cb;
 			}
-
 			break;
 		default:
 			llog_debug(vte, "unhandled SGR attr %i",
@@ -1149,7 +1170,6 @@ static void csi_attribute(struct tsm_vte *vte)
 		}
 	}
 
-	to_rgb(vte, &vte->cattr);
 	if (vte->flags & FLAG_BACKGROUND_COLOR_ERASE_MODE)
 		tsm_screen_set_def_attr(vte->con, &vte->cattr);
 }
@@ -1720,6 +1740,165 @@ static uint32_t vte_map(struct tsm_vte *vte, uint32_t val)
 	return val;
 }
 
+static int tokdec(char **rest, char delim)
+{
+	int i;
+	int n = 0;
+	char *str = *rest;
+
+	for (i = 0; str[i] != '\0'; ++i) {
+		char c = str[i];
+
+		if (c == delim) {
+			++i;
+			break;
+		}
+
+		if (!isdigit(c)) {
+			return -1;
+		}
+
+		n = n * 10 + (c - '0');
+	}
+
+	*rest = str + i;
+	return n;
+}
+
+static int tokhex(char **rest, char delim)
+{
+	int i;
+	int n = 0;
+	char *str = *rest;
+
+	for (i = 0; str[i] != '\0'; ++i) {
+		char c = str[i];
+
+		if (c == delim) {
+			++i;
+			break;
+		}
+
+		if (!isxdigit(c)) {
+			return -1;
+		}
+
+		n = n * 16 + 9 * (c >> 6) + (c & 0x0f);
+	}
+
+	*rest = str + i;
+	return n;
+}
+
+static char *tokstr(char **rest, char delim)
+{
+	int i;
+	char *str = *rest;
+
+	for (i = 0; str[i] != '\0'; ++i) {
+		if (str[i] == delim) {
+			str[i] = '\0';
+			++i;
+			break;
+		}
+	}
+
+	*rest = str + i;
+	return str;
+}
+
+static void do_osc(struct tsm_vte *vte, uint32_t data)
+{
+	int code;
+	char *rest = vte->osc_arg;
+
+	vte->osc_arg[vte->osc_len] = '\0';
+	code = tokdec(&rest, ';');
+	if (code < 0) {
+		fprintf(stderr, "invalid OSC code: %s\n", vte->osc_arg);
+		return;
+	}
+
+	switch(code) {
+	case 4:
+		while (rest[0] != '\0') {
+			char *spec;
+			int c = tokdec(&rest, ';');
+
+			if (c < 0 || c >= 256) {
+				fprintf(stderr, "invalid OSC color number\n");
+				return;
+			}
+
+			spec = tokstr(&rest, ';');
+
+			if (spec[0] == '?' && spec[1] == '\0') {
+				char buf[32];
+				char *term;
+				int len;
+
+				uint8_t r = vte->con->palette[c][0];
+				uint8_t g = vte->con->palette[c][1];
+				uint8_t b = vte->con->palette[c][2];
+
+				switch (data) {
+				case 0x07:
+					term = "\a";
+					break;
+				case 0x9c:
+					term = "\033\\";
+					break;
+				default:
+					fprintf(stderr, "unknown OSC terminator\n");
+					return;
+				}
+				len = sprintf(buf, "\033]4;%u;rgb:"
+						   "%02hhX/%02hhX/%02hhX%s",
+					      c, r, g, b, term);
+				vte_write(vte, buf, len);
+			} else {
+				char *rgb = tokstr(&spec, ':');
+				if (strcmp(rgb, "rgb") != 0) {
+					fprintf(stderr, "unsupported OSC color spec\n");
+					break;
+				}
+
+				int r = tokhex(&spec, '/');
+				int g = tokhex(&spec, '/');
+				int b = tokhex(&spec, '/');
+
+				if (r < 0 || r >= 256 ||
+				    g < 0 || g >= 256 ||
+				    b < 0 || b >= 256)
+					break;
+
+				tsm_screen_set_color(vte->con, c, r, g, b);
+			}
+		}
+		break;
+
+	case 104:
+		if (rest[0] == '\0') {
+			tsm_screen_set_palette(vte->con, default_palette);
+		} else {
+			while (rest[0] != '\0') {
+				int c = tokdec(&rest, ';');
+
+				if (c < 0 || c >= 256)
+					break;
+
+				tsm_screen_set_color(vte->con, c,
+						     default_palette[c][0],
+						     default_palette[c][1],
+						     default_palette[c][2]);
+			}
+		}
+		break;
+	default:
+		fprintf(stderr, "unhandled OSC code: %d\n", code);
+	}
+}
+
 /* perform parser action */
 static void do_action(struct tsm_vte *vte, uint32_t data, int action)
 {
@@ -1761,10 +1940,13 @@ static void do_action(struct tsm_vte *vte, uint32_t data, int action)
 		case ACTION_DCS_END:
 			break;
 		case ACTION_OSC_START:
+			do_clear(vte);
 			break;
 		case ACTION_OSC_COLLECT:
+			do_osc_collect(vte, data);
 			break;
 		case ACTION_OSC_END:
+			do_osc(vte, data);
 			break;
 		default:
 			llog_warning(vte, "invalid action %d", action);
