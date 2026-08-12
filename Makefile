@@ -2,6 +2,13 @@ VERSION = "0.7.0-git"
 
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
+ifeq ($(shell whoami), root)
+CFGDIR = /etc
+else ifneq (, ${XDG_CONFIG_HOME})
+CFGDIR = ${XDG_CONFIG_HOME}/havoc
+else ifneq (, ${HOME})
+CFGDIR = ${HOME}/.config/havoc
+endif
 
 PKG_CONFIG ?= pkg-config
 WAYLAND_SCANNER ?= wayland-scanner
@@ -87,10 +94,12 @@ fractional-scale-v1.xml:
 
 install: havoc
 	mkdir -p $(DESTDIR)$(BINDIR)
-	install -m 755 havoc $(DESTDIR)$(BINDIR)/havoc
+	install -m 755 havoc.cfg $(CFGDIR)/havoc.cfg  
+	install -m 755 havoc $(DESTDIR)$(BINDIR)
 
 uninstall:
 	rm $(DESTDIR)$(BINDIR)/havoc
+	rm $(CFGDIR)/havoc.cfg
 
 clean:
 	rm -f havoc $(XML) $(GEN) $(OBJ)

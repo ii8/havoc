@@ -1979,6 +1979,11 @@ static FILE *open_config(void)
 			return f;
 	}
 
+	snprintf(path, sizeof(path), "/etc/%s", CONF_FILE);
+	f = fopen(path, "r");
+	if (f)
+		return f;
+	
 	f = fopen(CONF_FILE, "r");
 	return f;
 }

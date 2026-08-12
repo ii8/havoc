@@ -17,7 +17,7 @@ make install
 ## Configure
 
 havoc will search for a file called `havoc.cfg` in `$XDG_CONFIG_HOME/havoc/` first,
-then in `$HOME/.config/havoc/` and last in the current working directory.
+then in `$HOME/.config/havoc/` then in `/etc/havoc.cfg` and last in the current working directory.
 
 See the example `havoc.cfg` for available options.
 
