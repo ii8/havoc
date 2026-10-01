@@ -192,6 +192,7 @@ static struct {
 		int scrollback;
 		bool scroll_to_bottom_on_input;
 		bool margin;
+		int padding;
 		unsigned char opacity;
 		enum deco decorations;
 		int font_size;
@@ -206,6 +207,7 @@ static struct {
 	.cfg.scrollback = 0,
 	.cfg.scroll_to_bottom_on_input = false,
 	.cfg.margin = false,
+	.cfg.padding = 0,
 	.cfg.opacity = 0xff,
 	.cfg.decorations = DECO_AUTO,
 	.cfg.font_size = 18,
@@ -781,7 +783,7 @@ static void redraw(void)
 	}
 
 	wl_surface_attach(term.surf, buffer->b, 0, 0);
-	if (term.cfg.margin && buffer->age == 0)
+	if ((term.cfg.margin || term.cfg.padding) && buffer->age == 0)
 		draw_margin(buffer);
 	buffer->age = tsm_screen_draw(term.screen, draw_cell, buffer);
 	if (buffer->age == 0)
@@ -1502,25 +1504,33 @@ static void do_configure(void)
 {
 	int scaledwidth, scaledheight;
 	int newwidth, newheight;
+	int padding_x, padding_y;
 	int col, row;
+	int padding = (term.cfg.padding * term.scale + 60) / 120;
 
 	if (term.confwidth)
 		scaledwidth = (term.confwidth * term.scale + 60) / 120;
 	else
-		scaledwidth = term.cfg.col * term.cwidth;
+		scaledwidth = term.cfg.col * term.cwidth + 2 * padding;
 
 	if (term.confheight)
 		scaledheight = (term.confheight * term.scale + 60) / 120;
 	else
-		scaledheight = term.cfg.row * term.cheight;
+		scaledheight = term.cfg.row * term.cheight + 2 * padding;
 
 	if (scaledwidth < term.cwidth)
 		scaledwidth = term.cwidth;
 	if (scaledheight < term.cheight)
 		scaledheight = term.cheight;
 
-	col = scaledwidth / term.cwidth;
-	row = scaledheight / term.cheight;
+	/* Keep at least one cell visible if the compositor makes the window small. */
+	padding_x = padding < (scaledwidth - term.cwidth) / 2
+		? padding : (scaledwidth - term.cwidth) / 2;
+	padding_y = padding < (scaledheight - term.cheight) / 2
+		? padding : (scaledheight - term.cheight) / 2;
+
+	col = (scaledwidth - 2 * padding_x) / term.cwidth;
+	row = (scaledheight - 2 * padding_y) / term.cheight;
 
 	if (term.cfg.margin) {
 		newwidth = scaledwidth;
@@ -1537,8 +1547,10 @@ static void do_configure(void)
 						    ? term.confheight
 						    : destination(newheight));
 	} else {
-		newwidth = col * term.cwidth;
-		newheight = row * term.cheight;
+		newwidth = col * term.cwidth + 2 * padding_x;
+		newheight = row * term.cheight + 2 * padding_y;
+		term.margin.left = padding_x;
+		term.margin.top = padding_y;
 
 		if (term.vp && term.fs)
 			wp_viewport_set_destination(term.vp,
@@ -1845,6 +1857,8 @@ static void window_config(char *key, char *val)
 		term.cfg.opacity = cfg_num(val, 10, 0, 255);
 	else if (strcmp(key, "margin") == 0)
 		term.cfg.margin = strcmp(val, "yes") == 0;
+	else if (strcmp(key, "padding") == 0)
+		term.cfg.padding = cfg_num(val, 10, 0, 1000);
 	else if (strcmp(key, "decorations") == 0)
 		term.cfg.decorations = strcmp(val, "yes") == 0 ? DECO_SERVER
 			: (strcmp(val, "no") == 0 ? DECO_NONE : DECO_AUTO);
