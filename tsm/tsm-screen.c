@@ -920,7 +920,7 @@ void tsm_screen_reset(struct tsm_screen *con)
 	screen_inc_age(con);
 	con->age = con->age_cnt;
 
-	con->flags = 0;
+	con->flags &= TSM_SCREEN_FIXED_POS;
 	con->margin_top = 0;
 	con->margin_bottom = con->size_y - 1;
 	con->lines = con->main_lines;
