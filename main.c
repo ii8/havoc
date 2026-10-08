@@ -188,6 +188,7 @@ static struct {
 
 	struct {
 		char shell[32];
+		char shell_argument[512];
 		int col, row;
 		int scrollback;
 		bool scroll_to_bottom_on_input;
@@ -1740,7 +1741,9 @@ static void setup_pty(char *argv[])
 			execvp(*argv, argv);
 			prog = *argv;
 		} else {
-			execlp(term.cfg.shell, term.cfg.shell, (char *) NULL);
+			execlp(term.cfg.shell, term.cfg.shell,
+				term.cfg.shell_argument[0] ? term.cfg.shell_argument : NULL,
+				(char *) NULL);
 			prog = term.cfg.shell;
 		}
 		fprintf(stderr, "could not execute %s: %s\n", prog,
@@ -1849,6 +1852,9 @@ static void child_config(char *key, char *val)
 {
 	if (strcmp(key, "program") == 0)
 		strncpy(term.cfg.shell, val, sizeof(term.cfg.shell) - 1);
+	else if (strcmp(key, "argument") == 0)
+		strncpy(term.cfg.shell_argument, val,
+			sizeof(term.cfg.shell_argument) - 1);
 }
 
 static void window_config(char *key, char *val)

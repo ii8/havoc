@@ -21,3 +21,13 @@ then in `$HOME/.config/havoc/` and last in the current working directory.
 
 See the example `havoc.cfg` for available options.
 
+To start a login shell, set its program and argument in the `[child]` section:
+
+```ini
+[child]
+program=oksh
+argument=-l
+```
+
+`argument` is passed as a single argument. Leave it empty to pass no argument.
+These settings apply when no program is specified on the command line.
