@@ -106,6 +106,7 @@ static struct {
 	struct wl_keyboard *kbd;
 	struct wl_pointer *ptr;
 	wl_fixed_t ptr_x, ptr_y;
+	double scroll_pending;
 
 	enum {
 		SS_RESET,
@@ -1227,6 +1228,7 @@ static void ptr_leave(void *data, struct wl_pointer *wl_pointer,
 		      uint32_t serial, struct wl_surface *surface)
 {
 	cursor_unset();
+	term.scroll_pending = 0;
 }
 
 static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
@@ -1314,9 +1316,15 @@ static void ptr_button(void *data, struct wl_pointer *wl_pointer,
 static void ptr_axis(void *data, struct wl_pointer *wl_pointer,
 		     uint32_t time, uint32_t axis, wl_fixed_t value)
 {
-	int v = wl_fixed_to_double(value) / 3;
+	int v;
 
 	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL)
+		return;
+
+	term.scroll_pending += wl_fixed_to_double(value) / 3;
+	v = term.scroll_pending;
+	term.scroll_pending -= v;
+	if (v == 0)
 		return;
 
 	if (v > 0)
@@ -1339,6 +1347,8 @@ static void ptr_axis_source(void *data, struct wl_pointer *wl_pointer,
 static void ptr_axis_stop(void *data, struct wl_pointer *wl_pointer,
 			  uint32_t time, uint32_t axis)
 {
+	if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+		term.scroll_pending = 0;
 }
 
 static void ptr_axis_discrete(void *data, struct wl_pointer *wl_pointer,
