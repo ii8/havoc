@@ -6,3 +6,4 @@ primary-selection-unstable-v1.*
 viewporter.*
 fractional-scale-v1.*
 havoc
+tests/test-glyph

@@ -59,6 +59,12 @@ OBJ = \
 havoc: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
 
+test: tests/test-glyph
+	./tests/test-glyph
+
+tests/test-glyph: tests/test-glyph.c glyph.c fallback.h
+	$(CC) $(CFLAGS) $(CDEFS) -o $@ tests/test-glyph.c -lm
+
 $(OBJ): $(GEN)
 
 .c.o:
@@ -93,6 +99,6 @@ uninstall:
 	rm $(DESTDIR)$(BINDIR)/havoc
 
 clean:
-	rm -f havoc $(XML) $(GEN) $(OBJ)
+	rm -f havoc tests/test-glyph $(XML) $(GEN) $(OBJ)
 
-.PHONY: install uninstall clean
+.PHONY: install uninstall clean test

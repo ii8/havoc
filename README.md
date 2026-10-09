@@ -21,3 +21,7 @@ then in `$HOME/.config/havoc/` and last in the current working directory.
 
 See the example `havoc.cfg` for available options.
 
+When the configured font lacks the basic ncurses box-drawing characters
+(`─ │ ┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼`), havoc draws them directly in the terminal cells.
+Characters provided by the font keep their original appearance.
+

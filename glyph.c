@@ -1457,13 +1457,56 @@ static unsigned char *lookup(struct node *n, uint32_t ch)
 	return NULL;
 }
 
+/* Draw the basic ncurses borders only when the font has no glyph. */
+static bool box_drawing(struct bitmap *bm, uint32_t c)
+{
+	enum { LEFT = 1, RIGHT = 2, UP = 4, DOWN = 8 };
+	unsigned int arms;
+	int x, y, cx = bm->w / 2, cy = bm->h / 2;
+	int thickness = bm->h / 16;
+
+	switch (c) {
+	case 0x2500: arms = LEFT | RIGHT; break;
+	case 0x2502: arms = UP | DOWN; break;
+	case 0x250c: arms = RIGHT | DOWN; break;
+	case 0x2510: arms = LEFT | DOWN; break;
+	case 0x2514: arms = RIGHT | UP; break;
+	case 0x2518: arms = LEFT | UP; break;
+	case 0x251c: arms = RIGHT | UP | DOWN; break;
+	case 0x2524: arms = LEFT | UP | DOWN; break;
+	case 0x252c: arms = LEFT | RIGHT | DOWN; break;
+	case 0x2534: arms = LEFT | RIGHT | UP; break;
+	case 0x253c: arms = LEFT | RIGHT | UP | DOWN; break;
+	default: return false;
+	}
+
+	if (thickness < 1)
+		thickness = 1;
+	for (y = 0; y < bm->h; ++y) {
+		for (x = 0; x < bm->w; ++x) {
+			bool horizontal = y >= cy - thickness / 2 &&
+				y < cy - thickness / 2 + thickness;
+			bool vertical = x >= cx - thickness / 2 &&
+				x < cx - thickness / 2 + thickness;
+			if ((horizontal &&
+			     (((arms & LEFT) && x < cx - thickness / 2 + thickness) ||
+			      ((arms & RIGHT) && x >= cx - thickness / 2))) ||
+			    (vertical &&
+			     (((arms & UP) && y < cy - thickness / 2 + thickness) ||
+			      ((arms & DOWN) && y >= cy - thickness / 2))))
+				bm->pixels[y * bm->stride + x] = 255;
+		}
+	}
+	return true;
+}
+
 unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth)
 {
 	struct vertex *vertices;
 	int xmin, ymin;
 	int glyph = find_index(&font, c);
-	float leftb = get_bearing(&font, glyph) * font.scale;
-	int vcount = glyph_shape(&font, glyph, &vertices);
+	float leftb;
+	int vcount;
 	struct bitmap bm = {
 		font.width * cwidth,
 		font.height,
@@ -1472,7 +1515,13 @@ unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth)
 	};
 
 	bm.pixels = calloc(1, bm.w * bm.h);
+	if (glyph == 0 && box_drawing(&bm, c)) {
+		cache(&font.cache, id, bm.pixels);
+		return bm.pixels;
+	}
 
+	leftb = get_bearing(&font, glyph) * font.scale;
+	vcount = glyph_shape(&font, glyph, &vertices);
 	get_glyph_origin(&font, glyph, &xmin, &ymin);
 	render(&bm, 0.35f, vertices, vcount, font.scale, font.scale,
 	       leftb, font.ascent + ymin, xmin, ymin, 1);
