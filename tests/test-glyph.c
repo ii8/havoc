@@ -56,10 +56,10 @@ static void check_borders(int size, int columns)
  assert(memcmp(missing, notdef, w * h) == 0);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
  int sizes[] = {6, 18, 32, 96, 300};
- assert(font_init("") == 0);
+ assert(font_init(argc > 1 ? argv[1] : "") == 0);
  for (unsigned int i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
   check_borders(sizes[i], 1);
   check_borders(sizes[i], 2);
