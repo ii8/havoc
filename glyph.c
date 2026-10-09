@@ -1457,7 +1457,6 @@ static unsigned char *lookup(struct node *n, uint32_t ch)
 	return NULL;
 }
 
-/* Draw the basic ncurses borders only when the font has no glyph. */
 static bool box_drawing(struct bitmap *bm, uint32_t c)
 {
 	enum { LEFT = 1, RIGHT = 2, UP = 4, DOWN = 8 };
@@ -1482,20 +1481,33 @@ static bool box_drawing(struct bitmap *bm, uint32_t c)
 
 	if (thickness < 1)
 		thickness = 1;
-	for (y = 0; y < bm->h; ++y) {
-		for (x = 0; x < bm->w; ++x) {
-			bool horizontal = y >= cy - thickness / 2 &&
-				y < cy - thickness / 2 + thickness;
-			bool vertical = x >= cx - thickness / 2 &&
-				x < cx - thickness / 2 + thickness;
-			if ((horizontal &&
-			     (((arms & LEFT) && x < cx - thickness / 2 + thickness) ||
-			      ((arms & RIGHT) && x >= cx - thickness / 2))) ||
-			    (vertical &&
-			     (((arms & UP) && y < cy - thickness / 2 + thickness) ||
-			      ((arms & DOWN) && y >= cy - thickness / 2))))
+
+	int x0 = cx - thickness / 2;
+	int y0 = cy - thickness / 2;
+	int x1 = x0 + thickness;
+	int y1 = y0 + thickness;
+
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > bm->w) x1 = bm->w;
+	if (y1 > bm->h) y1 = bm->h;
+
+	if (arms & (LEFT | RIGHT)) {
+		int start = (arms & LEFT) ? 0 : x0;
+		int end = (arms & RIGHT) ? bm->w : x1;
+
+		for (y = y0; y < y1; ++y)
+			for (x = start; x < end; ++x)
 				bm->pixels[y * bm->stride + x] = 255;
-		}
+	}
+
+	if (arms & (UP | DOWN)) {
+		int start = (arms & UP) ? 0 : y0;
+		int end = (arms & DOWN) ? bm->h : y1;
+
+		for (y = start; y < end; ++y)
+			for (x = x0; x < x1; ++x)
+				bm->pixels[y * bm->stride + x] = 255;
 	}
 	return true;
 }
