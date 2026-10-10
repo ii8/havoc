@@ -106,6 +106,11 @@ static struct {
 	struct wl_keyboard *kbd;
 	struct wl_pointer *ptr;
 	wl_fixed_t ptr_x, ptr_y;
+	struct {
+		unsigned int local_buttons, reported_buttons;
+		double axis[2], remainder[2];
+		int discrete[2];
+	} mouse;
 	double scroll_pending;
 
 	enum {
@@ -1213,6 +1218,12 @@ static void selection_start(enum tsm_screen_selection_mode mode)
 	tsm_screen_selection_start(term.screen, mode, grid_x(), grid_y());
 }
 
+/* Shift keeps local selection, paste and scrollback available. */
+static bool mouse_reporting(void)
+{
+	return !(term.mods & TSM_SHIFT_MASK) && tsm_vte_mouse_enabled(term.vte);
+}
+
 static void ptr_enter(void *data, struct wl_pointer *wl_pointer,
 		      uint32_t serial, struct wl_surface *surface,
 		      wl_fixed_t x, wl_fixed_t y)
@@ -1229,6 +1240,7 @@ static void ptr_leave(void *data, struct wl_pointer *wl_pointer,
 {
 	cursor_unset();
 	term.scroll_pending = 0;
+	term.mouse.remainder[0] = term.mouse.remainder[1] = 0;
 }
 
 static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
@@ -1236,6 +1248,14 @@ static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
 {
 	term.ptr_x = x;
 	term.ptr_y = y;
+
+	if (term.cursor.current == NULL && term.cursor.text)
+		cursor_set(term.cursor.text);
+	if (mouse_reporting() && !term.mouse.local_buttons) {
+		tsm_vte_handle_mouse(term.vte, TSM_MOUSE_MOVE, TSM_MOUSE_NONE,
+				     grid_x(), grid_y(), term.mods);
+		return;
+	}
 
 	switch (term.selection) {
 	case SS_ANCHORED:
@@ -1252,15 +1272,35 @@ static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
 	case SS_ACTIVE:
 		break;
 	}
-
-	if (term.cursor.current == NULL && term.cursor.text)
-		cursor_set(term.cursor.text);
 }
 
 static void ptr_button(void *data, struct wl_pointer *wl_pointer,
 		       uint32_t serial, uint32_t time, uint32_t button,
 		       uint32_t state)
 {
+	int b = button == 0x110 ? TSM_MOUSE_LEFT :
+		button == 0x112 ? TSM_MOUSE_MIDDLE :
+		button == 0x111 ? TSM_MOUSE_RIGHT : -1;
+
+	if (term.cursor.current == NULL && term.cursor.text)
+		cursor_set(term.cursor.text);
+	if (b >= 0) {
+		unsigned int mask = 1u << b;
+		bool pressed = state == WL_POINTER_BUTTON_STATE_PRESSED;
+		bool report = pressed ? mouse_reporting() :
+			(term.mouse.reported_buttons & mask) != 0;
+
+		if (report) {
+			if (pressed) term.mouse.reported_buttons |= mask;
+			else term.mouse.reported_buttons &= ~mask;
+			tsm_vte_handle_mouse(term.vte,
+				pressed ? TSM_MOUSE_PRESS : TSM_MOUSE_RELEASE,
+				b, grid_x(), grid_y(), term.mods);
+			return;
+		}
+		if (pressed) term.mouse.local_buttons |= mask;
+		else term.mouse.local_buttons &= ~mask;
+	}
 	if (button == 0x110) {
 		switch (state) {
 		case WL_POINTER_BUTTON_STATE_PRESSED:
@@ -1308,35 +1348,62 @@ static void ptr_button(void *data, struct wl_pointer *wl_pointer,
 		   state == WL_POINTER_BUTTON_STATE_RELEASED) {
 		paste(true);
 	}
+}
 
-	if (term.cursor.current == NULL && term.cursor.text)
-		cursor_set(term.cursor.text);
+static void scroll_axis(uint32_t axis)
+{
+	double value = term.mouse.axis[axis];
+	int discrete = term.mouse.discrete[axis];
+
+	term.mouse.axis[axis] = 0;
+	term.mouse.discrete[axis] = 0;
+	if (mouse_reporting()) {
+		int steps;
+		term.scroll_pending = 0;
+		if (discrete) {
+			steps = discrete;
+			term.mouse.remainder[axis] = 0;
+		} else {
+			term.mouse.remainder[axis] += value;
+			steps = term.mouse.remainder[axis] / 10;
+			term.mouse.remainder[axis] -= steps * 10.0;
+		}
+		while (steps) {
+			int button = axis == WL_POINTER_AXIS_VERTICAL_SCROLL ?
+				(steps < 0 ? TSM_MOUSE_WHEEL_UP : TSM_MOUSE_WHEEL_DOWN) :
+				(steps < 0 ? TSM_MOUSE_WHEEL_LEFT : TSM_MOUSE_WHEEL_RIGHT);
+			tsm_vte_handle_mouse(term.vte, TSM_MOUSE_PRESS, button,
+					     grid_x(), grid_y(), term.mods);
+			steps += steps < 0 ? 1 : -1;
+		}
+	} else {
+		int v;
+		term.mouse.remainder[axis] = 0;
+		if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return;
+		term.scroll_pending += value ? value / 3 : discrete * 3;
+		v = term.scroll_pending;
+		term.scroll_pending -= v;
+		if (v == 0) return;
+		if (v > 0) tsm_screen_sb_down(term.screen, v);
+		else tsm_screen_sb_up(term.screen, -v);
+		term.need_redraw = true;
+	}
 }
 
 static void ptr_axis(void *data, struct wl_pointer *wl_pointer,
 		     uint32_t time, uint32_t axis, wl_fixed_t value)
 {
-	int v;
-
-	if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL)
-		return;
-
-	term.scroll_pending += wl_fixed_to_double(value) / 3;
-	v = term.scroll_pending;
-	term.scroll_pending -= v;
-	if (v == 0)
-		return;
-
-	if (v > 0)
-		tsm_screen_sb_down(term.screen, v);
-	else
-		tsm_screen_sb_up(term.screen, -v);
-
-	term.need_redraw = true;
+	if (axis > WL_POINTER_AXIS_HORIZONTAL_SCROLL) return;
+	term.mouse.axis[axis] += wl_fixed_to_double(value);
+	if (wl_proxy_get_version((struct wl_proxy *)wl_pointer) < 5)
+		scroll_axis(axis);
 }
 
 static void ptr_frame(void *data, struct wl_pointer *wl_pointer)
 {
+	for (uint32_t axis = 0; axis < 2; ++axis)
+		if (term.mouse.axis[axis] || term.mouse.discrete[axis])
+			scroll_axis(axis);
 }
 
 static void ptr_axis_source(void *data, struct wl_pointer *wl_pointer,
@@ -1347,13 +1414,20 @@ static void ptr_axis_source(void *data, struct wl_pointer *wl_pointer,
 static void ptr_axis_stop(void *data, struct wl_pointer *wl_pointer,
 			  uint32_t time, uint32_t axis)
 {
-	if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
-		term.scroll_pending = 0;
+	if (axis <= WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
+		if (term.mouse.axis[axis] || term.mouse.discrete[axis])
+			scroll_axis(axis);
+		term.mouse.remainder[axis] = 0;
+		if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+			term.scroll_pending = 0;
+	}
 }
 
 static void ptr_axis_discrete(void *data, struct wl_pointer *wl_pointer,
 			      uint32_t axis, int32_t discrete)
 {
+	if (axis <= WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+		term.mouse.discrete[axis] += discrete;
 }
 
 static struct wl_pointer_listener ptr_listener = {
@@ -1691,7 +1765,8 @@ static void registry_get(void *data, struct wl_registry *r, uint32_t id,
 						1);
 		xdg_wm_base_add_listener(term.wm_base, &wm_base_listener, NULL);
 	} else if (strcmp(i, "wl_seat") == 0) {
-		term.seat = wl_registry_bind(r, id, &wl_seat_interface, 5);
+		term.seat = wl_registry_bind(r, id, &wl_seat_interface,
+					    version < 5 ? version : 5);
 		wl_seat_add_listener(term.seat, &seat_listener, NULL);
 	} else if (strcmp(i, "wl_data_device_manager") == 0) {
 		term.d_dm = wl_registry_bind(r, id,

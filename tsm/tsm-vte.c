@@ -160,6 +160,10 @@ struct tsm_vte {
 	unsigned long parse_cnt;
 
 	unsigned int state;
+	int mouse_mode;
+	bool mouse_sgr;
+	unsigned int mouse_buttons;
+	int mouse_x, mouse_y;
 	tsm_symbol_t last_sym;
 	int csi_argc;
 	int csi_argv[CSI_ARG_MAX];
@@ -538,6 +542,10 @@ static void restore_state(struct tsm_vte *vte)
 SHL_EXPORT
 void tsm_vte_reset(struct tsm_vte *vte)
 {
+	vte->mouse_mode = 0;
+	vte->mouse_sgr = false;
+	vte->mouse_buttons = 0;
+	vte->mouse_x = vte->mouse_y = -1;
 	vte->flags = 0;
 	vte->flags |= FLAG_TEXT_CURSOR_MODE;
 	vte->flags |= FLAG_AUTO_REPEAT_MODE;
@@ -1356,6 +1364,19 @@ static void csi_mode(struct tsm_vte *vte, bool set)
 			continue;
 		case 42: /* DECNRCM */
 			set_reset_flag(vte, set, FLAG_NATIONAL_CHARSET_MODE);
+			continue;
+		case 9: /* X10: button presses only */
+		case 1000: /* Button press and release */
+		case 1002: /* Button motion */
+		case 1003: /* All motion */
+			if (set || vte->mouse_mode == vte->csi_argv[i]) {
+				vte->mouse_mode = set ? vte->csi_argv[i] : 0;
+				vte->mouse_buttons = 0;
+				vte->mouse_x = vte->mouse_y = -1;
+			}
+			continue;
+		case 1006: /* SGR mouse encoding */
+			vte->mouse_sgr = set;
 			continue;
 		case 47: /* Alternate screen buffer */
 			if (vte->flags & FLAG_TITE_INHIBIT_MODE)
@@ -2834,6 +2855,72 @@ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
 
 	vte->flags &= ~FLAG_PREPEND_ESCAPE;
 	return false;
+}
+
+SHL_EXPORT
+bool tsm_vte_mouse_enabled(struct tsm_vte *vte)
+{
+	return vte->mouse_mode != 0;
+}
+
+SHL_EXPORT
+bool tsm_vte_handle_mouse(struct tsm_vte *vte, enum tsm_vte_mouse_event event,
+			 enum tsm_vte_mouse_button button, int x, int y,
+			 unsigned int mods)
+{
+	char buf[64];
+	int code = button, len;
+	bool wheel = button >= TSM_MOUSE_WHEEL_UP &&
+		     button <= TSM_MOUSE_WHEEL_RIGHT;
+
+	if (!vte->mouse_mode)
+		return false;
+	if (event == TSM_MOUSE_MOVE) {
+		if (vte->mouse_mode != 1003 &&
+		    (vte->mouse_mode != 1002 || !vte->mouse_buttons))
+			return true;
+		if (x == vte->mouse_x && y == vte->mouse_y)
+			return true;
+		for (code = 0; code < 3; ++code)
+			if (vte->mouse_buttons & (1u << code)) break;
+		code |= 32;
+	} else if (event == TSM_MOUSE_PRESS) {
+		if (button < TSM_MOUSE_LEFT || (button > TSM_MOUSE_RIGHT && !wheel))
+			return true;
+		if (!wheel) vte->mouse_buttons |= 1u << button;
+	} else if (event == TSM_MOUSE_RELEASE) {
+		if (button < TSM_MOUSE_LEFT || button > TSM_MOUSE_RIGHT ||
+		    !(vte->mouse_buttons & (1u << button)))
+			return true;
+		vte->mouse_buttons &= ~(1u << button);
+		if (vte->mouse_mode == 9) return true;
+		if (!vte->mouse_sgr) code = 3;
+	} else {
+		return true;
+	}
+
+	if (x < 0 || y < 0) return true;
+	if (x >= vte->con->size_x) x = vte->con->size_x - 1;
+	if (y >= vte->con->size_y) y = vte->con->size_y - 1;
+	vte->mouse_x = x;
+	vte->mouse_y = y;
+	if (vte->mouse_mode != 9) {
+		if (mods & TSM_SHIFT_MASK) code |= 4;
+		if (mods & TSM_ALT_MASK) code |= 8;
+		if (mods & TSM_CONTROL_MASK) code |= 16;
+	}
+	if (vte->mouse_sgr) {
+		len = snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c", code, x + 1, y + 1,
+			       event == TSM_MOUSE_RELEASE ? 'm' : 'M');
+		vte_write(vte, buf, len);
+	} else if (x < 223 && y < 223) {
+		memcpy(buf, "\033[M", 3);
+		buf[3] = code + 32;
+		buf[4] = x + 33;
+		buf[5] = y + 33;
+		vte_write_raw(vte, buf, 6);
+	}
+	return true;
 }
 
 SHL_EXPORT

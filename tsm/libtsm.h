@@ -301,6 +301,30 @@ void tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len);
 bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
 			     uint32_t ascii, unsigned int mods,
 			     uint32_t unicode);
+
+enum tsm_vte_mouse_event {
+	TSM_MOUSE_PRESS,
+	TSM_MOUSE_RELEASE,
+	TSM_MOUSE_MOVE
+};
+
+enum tsm_vte_mouse_button {
+	TSM_MOUSE_LEFT,
+	TSM_MOUSE_MIDDLE,
+	TSM_MOUSE_RIGHT,
+	TSM_MOUSE_NONE,
+	TSM_MOUSE_WHEEL_UP = 64,
+	TSM_MOUSE_WHEEL_DOWN,
+	TSM_MOUSE_WHEEL_LEFT,
+	TSM_MOUSE_WHEEL_RIGHT
+};
+
+bool tsm_vte_mouse_enabled(struct tsm_vte *vte);
+/* Coordinates are zero-based cells. True means the event was consumed. */
+bool tsm_vte_handle_mouse(struct tsm_vte *vte, enum tsm_vte_mouse_event event,
+			 enum tsm_vte_mouse_button button, int x, int y,
+			 unsigned int mods);
+
 void tsm_vte_paste_begin(struct tsm_vte *vte);
 void tsm_vte_paste_end(struct tsm_vte *vte);
 
