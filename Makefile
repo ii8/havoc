@@ -59,6 +59,7 @@ OBJ = \
 havoc: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
 
+
 $(OBJ): $(GEN)
 
 .c.o:
