@@ -187,8 +187,7 @@ static struct {
 	} *binding;
 
 	struct {
-		char shell[32];
-		char shell_argument[512];
+		char shell[512];
 		int col, row;
 		int scrollback;
 		bool scroll_to_bottom_on_input;
@@ -1727,6 +1726,47 @@ static const struct wl_registry_listener reg_listener = {
 	.global_remove = registry_loose,
 };
 
+/* Split in place, preserving quoted empty arguments. */
+static bool parse_command(char *command, char *argv[], size_t capacity)
+{
+	char *src = command, *dst = command;
+	size_t argc = 0;
+
+	while (*src) {
+		char quote = 0;
+		while (isspace((unsigned char)*src))
+			++src;
+		if (!*src) break;
+		if (argc + 1 >= capacity) return false;
+		argv[argc++] = dst;
+
+		while (*src && (quote || !isspace((unsigned char)*src))) {
+			char c = *src++;
+			if (c == '\\' && quote != '\'') {
+				if (!*src) return false;
+				/* Inside double quotes, backslash is special only
+				 * before these characters, as in a shell. */
+				if (quote == '"' && !strchr("\"\\$`\n", *src))
+					*dst++ = '\\';
+				if (*src != '\n') *dst++ = *src;
+				++src;
+			} else if (c == quote) {
+				quote = 0;
+			} else if (!quote && (c == '\'' || c == '"')) {
+				quote = c;
+			} else {
+				*dst++ = c;
+			}
+		}
+		if (quote) return false;
+		/* Advance past the separator before overwriting it. */
+		if (*src) ++src;
+		*dst++ = '\0';
+	}
+	argv[argc] = NULL;
+	return argc && *argv[0];
+}
+
 static void setup_pty(char *argv[])
 {
 	pid_t pid = forkpty(&term.master_fd, NULL, NULL, NULL);
@@ -1735,19 +1775,20 @@ static void setup_pty(char *argv[])
 		error("forkpty failed");
 		exit(EXIT_FAILURE);
 	} else if (pid == 0) {
-		char *prog;
+		char *command_argv[sizeof(term.cfg.shell) / 2 + 1];
 		setenv("TERM", "xterm-256color", 1);
-		if (*argv) {
-			execvp(*argv, argv);
-			prog = *argv;
-		} else {
-			execlp(term.cfg.shell, term.cfg.shell,
-				term.cfg.shell_argument[0] ? term.cfg.shell_argument : NULL,
-				(char *) NULL);
-			prog = term.cfg.shell;
+		if (!*argv) {
+			if (!parse_command(term.cfg.shell, command_argv,
+					   ARRAY_LENGTH(command_argv))) {
+				fprintf(stderr, "invalid command in [child] program\n");
+				goto fallback;
+			}
+			argv = command_argv;
 		}
-		fprintf(stderr, "could not execute %s: %s\n", prog,
+		execvp(*argv, argv);
+		fprintf(stderr, "could not execute %s: %s\n", *argv,
 			strerror(errno));
+	fallback:
 		fprintf(stderr, "running /bin/sh...\n");
 		execl("/bin/sh", "/bin/sh", (char *) NULL);
 		fprintf(stderr, "could not execute /bin/sh either: %s\n",
@@ -1852,9 +1893,6 @@ static void child_config(char *key, char *val)
 {
 	if (strcmp(key, "program") == 0)
 		strncpy(term.cfg.shell, val, sizeof(term.cfg.shell) - 1);
-	else if (strcmp(key, "argument") == 0)
-		strncpy(term.cfg.shell_argument, val,
-			sizeof(term.cfg.shell_argument) - 1);
 }
 
 static void window_config(char *key, char *val)
