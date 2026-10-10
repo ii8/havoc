@@ -260,6 +260,11 @@ int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
 void tsm_vte_ref(struct tsm_vte *vte);
 void tsm_vte_unref(struct tsm_vte *vte);
 
+/* The UTF-8 title is valid only for the duration of the callback. */
+typedef void (*tsm_vte_title_cb) (struct tsm_vte *vte, const char *title,
+				void *data);
+void tsm_vte_set_title_cb(struct tsm_vte *vte, tsm_vte_title_cb cb, void *data);
+
 #define TSM_COLOR_NUM 256
 enum tsm_vte_color {
 	TSM_COLOR_BACKGROUND = -3,

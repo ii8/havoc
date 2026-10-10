@@ -47,6 +47,7 @@
  */
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,7 +75,8 @@ enum parser_state {
 	STATE_DCS_INT,		/* intermediate DCS characters */
 	STATE_DCS_PASS,		/* DCS data passthrough */
 	STATE_DCS_IGNORE,	/* DCS error; ignore this DCS sequence */
-	STATE_OSC_STRING,	/* parsing OCS sequence */
+	STATE_OSC_STRING,	/* parsing OSC sequence */
+	STATE_OSC_ESC,		/* possible ESC \ terminator */
 	STATE_ST_IGNORE,	/* unimplemented seq; ignore until ST */
 	STATE_NUM
 };
@@ -115,7 +117,7 @@ enum parser_action {
 /* max CSI arguments */
 #define CSI_ARG_MAX 16
 
-#define OSC_BUFSIZE 256
+#define OSC_BUFSIZE 4096
 
 /* terminal flags */
 #define FLAG_CURSOR_KEY_MODE			0x00000001 /* DEC cursor key mode */
@@ -155,6 +157,8 @@ struct tsm_vte {
 	struct tsm_screen *con;
 	tsm_vte_write_cb write_cb;
 	void *data;
+	tsm_vte_title_cb title_cb;
+	void *title_data;
 
 	struct tsm_utf8_mach *mach;
 	unsigned long parse_cnt;
@@ -167,6 +171,7 @@ struct tsm_vte {
 
 	char osc_arg[OSC_BUFSIZE];
 	int osc_len;
+	bool osc_overflow;
 
 	struct tsm_screen_attr def_attr;
 	struct tsm_screen_attr cattr;
@@ -308,6 +313,13 @@ int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
 err_free:
 	free(vte);
 	return ret;
+}
+
+SHL_EXPORT
+void tsm_vte_set_title_cb(struct tsm_vte *vte, tsm_vte_title_cb cb, void *data)
+{
+	vte->title_cb = cb;
+	vte->title_data = data;
 }
 
 SHL_EXPORT
@@ -697,6 +709,7 @@ static void do_clear(struct tsm_vte *vte)
 	vte->csi_flags = 0;
 
 	vte->osc_len = 0;
+	vte->osc_overflow = false;
 }
 
 static void do_collect(struct tsm_vte *vte, uint32_t data)
@@ -743,7 +756,10 @@ static void do_osc_collect(struct tsm_vte *vte, uint32_t data)
 	char buf[4];
 	int n = tsm_ucs4_to_utf8(data, buf);
 
+	if (vte->osc_overflow)
+		return;
 	if (vte->osc_len + n > sizeof(vte->osc_arg) - 1) {
+		vte->osc_overflow = true;
 		fprintf(stderr, "OSC buffer overflow\n");
 		return;
 	}
@@ -1758,6 +1774,8 @@ static int tokdec(char **rest, char delim)
 			return -1;
 		}
 
+		if (n > (INT_MAX - (c - '0')) / 10)
+			return -1;
 		n = n * 10 + (c - '0');
 	}
 
@@ -1812,6 +1830,9 @@ static void do_osc(struct tsm_vte *vte, uint32_t data)
 	int code;
 	char *rest = vte->osc_arg;
 
+	/* Other state transitions cancel the command. */
+	if ((data != 0x07 && data != 0x9c) || vte->osc_overflow)
+		return;
 	vte->osc_arg[vte->osc_len] = '\0';
 	code = tokdec(&rest, ';');
 	if (code < 0) {
@@ -1820,6 +1841,14 @@ static void do_osc(struct tsm_vte *vte, uint32_t data)
 	}
 
 	switch(code) {
+	case 0:
+	case 2:
+		if (strchr(vte->osc_arg, ';') && vte->title_cb)
+			vte->title_cb(vte, rest, vte->title_data);
+		break;
+	case 1:
+		/* Wayland has no separate icon title. */
+		break;
 	case 4:
 		while (rest[0] != '\0') {
 			char *spec;
@@ -1995,6 +2024,20 @@ static void do_trans(struct tsm_vte *vte, uint32_t data, int state, int act)
  */
 static void parse_data(struct tsm_vte *vte, uint32_t raw)
 {
+	/* ESC must be followed by backslash before an OSC is complete. */
+	if (vte->state == STATE_OSC_ESC) {
+		vte->state = STATE_OSC_STRING;
+		if (raw == '\\') {
+			do_trans(vte, 0x9c, STATE_GROUND, ACTION_NONE);
+			return;
+		}
+		do_trans(vte, 0x1b, STATE_ESC, ACTION_NONE);
+	}
+	if (vte->state == STATE_OSC_STRING && raw == 0x1b) {
+		vte->state = STATE_OSC_ESC;
+		return;
+	}
+
 	/* events that may occur in any state */
 	switch (raw) {
 		case 0x18:
