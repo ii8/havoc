@@ -111,7 +111,6 @@ typedef uint_fast32_t tsm_age_t;
 #define TSM_SCREEN_REL_ORIGIN	0x04
 #define TSM_SCREEN_INVERSE	0x08
 #define TSM_SCREEN_HIDE_CURSOR	0x10
-#define TSM_SCREEN_FIXED_POS	0x20
 #define TSM_SCREEN_ALTERNATE	0x40
 
 struct tsm_screen_attr {
