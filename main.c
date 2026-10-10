@@ -111,6 +111,7 @@ static struct {
 		double axis[2], remainder[2];
 		int discrete[2];
 	} mouse;
+	double scroll_pending;
 
 	enum {
 		SS_RESET,
@@ -1238,6 +1239,8 @@ static void ptr_leave(void *data, struct wl_pointer *wl_pointer,
 		      uint32_t serial, struct wl_surface *surface)
 {
 	cursor_unset();
+	term.scroll_pending = 0;
+	term.mouse.remainder[0] = term.mouse.remainder[1] = 0;
 }
 
 static void ptr_motion(void *data, struct wl_pointer *wl_pointer,
@@ -1356,6 +1359,7 @@ static void scroll_axis(uint32_t axis)
 	term.mouse.discrete[axis] = 0;
 	if (mouse_reporting()) {
 		int steps;
+		term.scroll_pending = 0;
 		if (discrete) {
 			steps = discrete;
 			term.mouse.remainder[axis] = 0;
@@ -1373,9 +1377,13 @@ static void scroll_axis(uint32_t axis)
 			steps += steps < 0 ? 1 : -1;
 		}
 	} else {
-		int v = value ? value / 3 : discrete * 3;
+		int v;
 		term.mouse.remainder[axis] = 0;
 		if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return;
+		term.scroll_pending += value ? value / 3 : discrete * 3;
+		v = term.scroll_pending;
+		term.scroll_pending -= v;
+		if (v == 0) return;
 		if (v > 0) tsm_screen_sb_down(term.screen, v);
 		else tsm_screen_sb_up(term.screen, -v);
 		term.need_redraw = true;
@@ -1410,6 +1418,8 @@ static void ptr_axis_stop(void *data, struct wl_pointer *wl_pointer,
 		if (term.mouse.axis[axis] || term.mouse.discrete[axis])
 			scroll_axis(axis);
 		term.mouse.remainder[axis] = 0;
+		if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+			term.scroll_pending = 0;
 	}
 }
 
