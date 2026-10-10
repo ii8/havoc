@@ -2159,7 +2159,6 @@ retry:
 
 	if (tsm_vte_new(&term.vte, term.screen, wcb, NULL) < 0)
 		fail(evte, "failed to create tsm vte");
-	tsm_screen_set_flags(term.screen, TSM_SCREEN_FIXED_POS);
 
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)
