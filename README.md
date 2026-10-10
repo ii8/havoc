@@ -20,4 +20,3 @@ havoc will search for a file called `havoc.cfg` in `$XDG_CONFIG_HOME/havoc/` fir
 then in `$HOME/.config/havoc/` and last in the current working directory.
 
 See the example `havoc.cfg` for available options.
-
