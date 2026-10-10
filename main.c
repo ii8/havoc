@@ -225,6 +225,11 @@ static void wcb(struct tsm_vte *vte, const char *u8, size_t len, void *data)
 		error("could not write to pty master");
 }
 
+static void title_cb(struct tsm_vte *vte, const char *title, void *data)
+{
+	xdg_toplevel_set_title(term.toplvl, *title ? title : "havoc");
+}
+
 static void handle_display(int ev)
 {
 	if (ev & POLLHUP) {
@@ -2184,6 +2189,7 @@ retry:
 		fail(etoplvl, "could not create xdg_toplevel");
 	xdg_toplevel_add_listener(term.toplvl, &toplvl_listener, NULL);
 	xdg_toplevel_set_title(term.toplvl, "havoc");
+	tsm_vte_set_title_cb(term.vte, title_cb, NULL);
 	xdg_toplevel_set_app_id(term.toplvl, term.opt.app_id);
 
 	if (term.vpm && term.fsm) {
