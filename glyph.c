@@ -1457,57 +1457,164 @@ static unsigned char *lookup(struct node *n, uint32_t ch)
 	return NULL;
 }
 
-static bool box_drawing(struct bitmap *bm, uint32_t c)
+/* Rectangle coordinates are exclusive at the right and bottom edges. */
+static void box_rect(struct bitmap *bm, int x0, int y0, int x1, int y1)
 {
-	enum { LEFT = 1, RIGHT = 2, UP = 4, DOWN = 8 };
-	unsigned int arms;
-	int x, y, cx = bm->w / 2, cy = bm->h / 2;
-	int thickness = bm->h / 16;
-
-	switch (c) {
-	case 0x2500: arms = LEFT | RIGHT; break;
-	case 0x2502: arms = UP | DOWN; break;
-	case 0x250c: arms = RIGHT | DOWN; break;
-	case 0x2510: arms = LEFT | DOWN; break;
-	case 0x2514: arms = RIGHT | UP; break;
-	case 0x2518: arms = LEFT | UP; break;
-	case 0x251c: arms = RIGHT | UP | DOWN; break;
-	case 0x2524: arms = LEFT | UP | DOWN; break;
-	case 0x252c: arms = LEFT | RIGHT | DOWN; break;
-	case 0x2534: arms = LEFT | RIGHT | UP; break;
-	case 0x253c: arms = LEFT | RIGHT | UP | DOWN; break;
-	default: return false;
-	}
-
-	if (thickness < 1)
-		thickness = 1;
-
-	int x0 = cx - thickness / 2;
-	int y0 = cy - thickness / 2;
-	int x1 = x0 + thickness;
-	int y1 = y0 + thickness;
-
+	int y;
 	if (x0 < 0) x0 = 0;
 	if (y0 < 0) y0 = 0;
 	if (x1 > bm->w) x1 = bm->w;
 	if (y1 > bm->h) y1 = bm->h;
+	if (x0 >= x1 || y0 >= y1) return;
+	for (y = y0; y < y1; ++y)
+		memset(bm->pixels + y * bm->stride + x0, 255, x1 - x0);
+}
 
-	if (arms & (LEFT | RIGHT)) {
-		int start = (arms & LEFT) ? 0 : x0;
-		int end = (arms & RIGHT) ? bm->w : x1;
+static bool box_drawing(struct bitmap *bm, uint32_t c)
+{
+	/* Left, right, up, down: absent, light, heavy, double. */
+	static const unsigned char strokes[128][4] = {
+		{ 1, 1, 0, 0 }, { 2, 2, 0, 0 }, { 0, 0, 1, 1 }, { 0, 0, 2, 2 }, /* 2500-2503 */
+		{ 1, 1, 0, 0 }, { 2, 2, 0, 0 }, { 0, 0, 1, 1 }, { 0, 0, 2, 2 }, /* 2504-2507 */
+		{ 1, 1, 0, 0 }, { 2, 2, 0, 0 }, { 0, 0, 1, 1 }, { 0, 0, 2, 2 }, /* 2508-250B */
+		{ 0, 1, 0, 1 }, { 0, 2, 0, 1 }, { 0, 1, 0, 2 }, { 0, 2, 0, 2 }, /* 250C-250F */
+		{ 1, 0, 0, 1 }, { 2, 0, 0, 1 }, { 1, 0, 0, 2 }, { 2, 0, 0, 2 }, /* 2510-2513 */
+		{ 0, 1, 1, 0 }, { 0, 2, 1, 0 }, { 0, 1, 2, 0 }, { 0, 2, 2, 0 }, /* 2514-2517 */
+		{ 1, 0, 1, 0 }, { 2, 0, 1, 0 }, { 1, 0, 2, 0 }, { 2, 0, 2, 0 }, /* 2518-251B */
+		{ 0, 1, 1, 1 }, { 0, 2, 1, 1 }, { 0, 1, 2, 1 }, { 0, 1, 1, 2 }, /* 251C-251F */
+		{ 0, 1, 2, 2 }, { 0, 2, 2, 1 }, { 0, 2, 1, 2 }, { 0, 2, 2, 2 }, /* 2520-2523 */
+		{ 1, 0, 1, 1 }, { 2, 0, 1, 1 }, { 1, 0, 2, 1 }, { 1, 0, 1, 2 }, /* 2524-2527 */
+		{ 1, 0, 2, 2 }, { 2, 0, 2, 1 }, { 2, 0, 1, 2 }, { 2, 0, 2, 2 }, /* 2528-252B */
+		{ 1, 1, 0, 1 }, { 2, 1, 0, 1 }, { 1, 2, 0, 1 }, { 2, 2, 0, 1 }, /* 252C-252F */
+		{ 1, 1, 0, 2 }, { 2, 1, 0, 2 }, { 1, 2, 0, 2 }, { 2, 2, 0, 2 }, /* 2530-2533 */
+		{ 1, 1, 1, 0 }, { 2, 1, 1, 0 }, { 1, 2, 1, 0 }, { 2, 2, 1, 0 }, /* 2534-2537 */
+		{ 1, 1, 2, 0 }, { 2, 1, 2, 0 }, { 1, 2, 2, 0 }, { 2, 2, 2, 0 }, /* 2538-253B */
+		{ 1, 1, 1, 1 }, { 2, 1, 1, 1 }, { 1, 2, 1, 1 }, { 2, 2, 1, 1 }, /* 253C-253F */
+		{ 1, 1, 2, 1 }, { 1, 1, 1, 2 }, { 1, 1, 2, 2 }, { 2, 1, 2, 1 }, /* 2540-2543 */
+		{ 1, 2, 2, 1 }, { 2, 1, 1, 2 }, { 1, 2, 1, 2 }, { 2, 2, 2, 1 }, /* 2544-2547 */
+		{ 2, 2, 1, 2 }, { 2, 1, 2, 2 }, { 1, 2, 2, 2 }, { 2, 2, 2, 2 }, /* 2548-254B */
+		{ 1, 1, 0, 0 }, { 2, 2, 0, 0 }, { 0, 0, 1, 1 }, { 0, 0, 2, 2 }, /* 254C-254F */
+		{ 3, 3, 0, 0 }, { 0, 0, 3, 3 }, { 0, 3, 0, 1 }, { 0, 1, 0, 3 }, /* 2550-2553 */
+		{ 0, 3, 0, 3 }, { 3, 0, 0, 1 }, { 1, 0, 0, 3 }, { 3, 0, 0, 3 }, /* 2554-2557 */
+		{ 0, 3, 1, 0 }, { 0, 1, 3, 0 }, { 0, 3, 3, 0 }, { 3, 0, 1, 0 }, /* 2558-255B */
+		{ 1, 0, 3, 0 }, { 3, 0, 3, 0 }, { 0, 3, 1, 1 }, { 0, 1, 3, 3 }, /* 255C-255F */
+		{ 0, 3, 3, 3 }, { 3, 0, 1, 1 }, { 1, 0, 3, 3 }, { 3, 0, 3, 3 }, /* 2560-2563 */
+		{ 3, 3, 0, 1 }, { 1, 1, 0, 3 }, { 3, 3, 0, 3 }, { 3, 3, 1, 0 }, /* 2564-2567 */
+		{ 1, 1, 3, 0 }, { 3, 3, 3, 0 }, { 3, 3, 1, 1 }, { 1, 1, 3, 3 }, /* 2568-256B */
+		{ 3, 3, 3, 3 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, /* 256C-256F */
+		{ 0, 0, 0, 0 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, /* 2570-2573 */
+		{ 1, 0, 0, 0 }, { 0, 0, 1, 0 }, { 0, 1, 0, 0 }, { 0, 0, 0, 1 }, /* 2574-2577 */
+		{ 2, 0, 0, 0 }, { 0, 0, 2, 0 }, { 0, 2, 0, 0 }, { 0, 0, 0, 2 }, /* 2578-257B */
+		{ 1, 2, 0, 0 }, { 0, 0, 1, 2 }, { 2, 1, 0, 0 }, { 0, 0, 2, 1 }, /* 257C-257F */
+	};
+	const unsigned char *arms;
+	int cx = bm->w / 2, cy = bm->h / 2;
+	int light = bm->h / 16, heavy, gap, d, lane;
 
-		for (y = y0; y < y1; ++y)
-			for (x = start; x < end; ++x)
-				bm->pixels[y * bm->stride + x] = 255;
+	if (c < 0x2500 || c > 0x257f)
+		return false;
+	if (light < 1) light = 1;
+	/* Keep both rails distinct even in narrow cells. */
+	if (light > (bm->w + 2) / 3) light = (bm->w + 2) / 3;
+	heavy = light * 2;
+	gap = bm->w >= 3 * light && bm->h >= 3 * light ? light : 0;
+
+	if (c >= 0x256d && c <= 0x2573) {
+		int steps = 4 * (bm->w + bm->h), i;
+		int sx = (c == 0x256d || c == 0x2570) ? 1 : -1;
+		int sy = (c == 0x256d || c == 0x256e) ? 1 : -1;
+		int radius = bm->w / 3;
+		if (radius > bm->h / 3) radius = bm->h / 3;
+		if (c <= 0x2570) {
+			box_rect(bm, sx > 0 ? cx + radius : 0,
+				 cy - light / 2, sx > 0 ? bm->w : cx - radius + 1,
+				 cy - light / 2 + light);
+			box_rect(bm, cx - light / 2, sy > 0 ? cy + radius : 0,
+				 cx - light / 2 + light,
+				 sy > 0 ? bm->h : cy - radius + 1);
+		}
+		for (lane = 0; lane < (c == 0x2573 ? 2 : 1); ++lane) {
+			for (i = 0; i <= steps; ++i) {
+				double t = (double)i / steps;
+				int x, y;
+				if (c <= 0x2570) {
+					x = (int)round(cx + sx * radius * (1-t) * (1-t));
+					y = (int)round(cy + sy * radius * t * t);
+				} else {
+					x = (int)round(t * (bm->w - 1));
+					y = (int)round((c == 0x2572 || lane ? t : 1-t) * (bm->h - 1));
+				}
+				box_rect(bm, x - light / 2, y - light / 2,
+					 x - light / 2 + light, y - light / 2 + light);
+			}
+		}
+		return true;
 	}
 
-	if (arms & (UP | DOWN)) {
-		int start = (arms & UP) ? 0 : y0;
-		int end = (arms & DOWN) ? bm->h : y1;
+	arms = strokes[c - 0x2500];
+	if ((c >= 0x2504 && c <= 0x250b) || (c >= 0x254c && c <= 0x254f)) {
+		int vertical = arms[2] != 0;
+		int length = vertical ? bm->h : bm->w;
+		int count = c >= 0x254c ? 2 : c >= 0x2508 ? 4 : 3;
+		int width = (arms[vertical ? 2 : 0] == 2) ? heavy : light;
+		int i;
+		for (i = 0; i < count; ++i) {
+			int start = i * length / count;
+			int end = (i + 1) * length / count;
+			int space = (end - start) / 3;
+			if (space < 1 && end - start > 1) space = 1;
+			if (vertical)
+				box_rect(bm, cx - width / 2, start,
+					 cx - width / 2 + width, end - space);
+			else
+				box_rect(bm, start, cy - width / 2,
+					 end - space, cy - width / 2 + width);
+		}
+		return true;
+	}
 
-		for (y = start; y < end; ++y)
-			for (x = x0; x < x1; ++x)
-				bm->pixels[y * bm->stride + x] = 255;
+	for (d = 0; d < 4; ++d) {
+		int width = arms[d] == 2 ? heavy : light;
+		int horizontal = d < 2;
+		int center = horizontal ? cy : cx;
+		int junction = horizontal ? cx : cy;
+		int negative = d == 0 || d == 2;
+		int a = horizontal ? 2 : 0, b = a + 1;
+		int reach = light;
+		if (!arms[d]) continue;
+		if (arms[a] == 2 || arms[b] == 2) reach = heavy;
+		for (lane = 0; lane < (arms[d] == 3 ? 2 : 1); ++lane) {
+			int offset = arms[d] == 3 ? (lane ? gap : -gap) : 0;
+			int pos = center + offset - width / 2;
+			int start = negative ? 0 : junction - reach / 2;
+			int end = negative ? junction - reach / 2 + reach :
+				(horizontal ? bm->w : bm->h);
+			if (arms[a] == 3 || arms[b] == 3) {
+				/* Join the matching rails, leaving the inside of
+				 * double corners and junctions open. */
+				int turn = negative ? -gap : gap;
+				if (arms[d] != 3 ||
+				    (arms[a] != 3 && lane == 0) ||
+				    (arms[b] != 3 && lane == 1))
+					turn = -turn;
+				if (negative) end = junction + turn - light / 2 + light;
+				else start = junction + turn - light / 2;
+			} else if (arms[d] == 3 && (arms[a] || arms[b])) {
+				/* A single perpendicular stroke meets both rails. */
+				if (horizontal)
+					box_rect(bm, cx - reach / 2,
+						 cy - gap - light / 2,
+						 cx - reach / 2 + reach,
+						 cy + gap - light / 2 + light);
+				else
+					box_rect(bm, cx - gap - light / 2,
+						 cy - reach / 2,
+						 cx + gap - light / 2 + light,
+						 cy - reach / 2 + reach);
+			}
+			if (horizontal) box_rect(bm, start, pos, end, pos + width);
+			else box_rect(bm, pos, start, pos + width, end);
+		}
 	}
 	return true;
 }
@@ -1516,7 +1623,7 @@ unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth)
 {
 	struct vertex *vertices;
 	int xmin, ymin;
-	int glyph = find_index(&font, c);
+	int glyph;
 	float leftb;
 	int vcount;
 	struct bitmap bm = {
@@ -1527,11 +1634,12 @@ unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth)
 	};
 
 	bm.pixels = calloc(1, bm.w * bm.h);
-	if (glyph == 0 && box_drawing(&bm, c)) {
+	if (box_drawing(&bm, c)) {
 		cache(&font.cache, id, bm.pixels);
 		return bm.pixels;
 	}
 
+	glyph = find_index(&font, c);
 	leftb = get_bearing(&font, glyph) * font.scale;
 	vcount = glyph_shape(&font, glyph, &vertices);
 	get_glyph_origin(&font, glyph, &xmin, &ymin);
