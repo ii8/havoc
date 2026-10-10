@@ -1563,25 +1563,6 @@ void tsm_screen_erase_screen(struct tsm_screen *con, bool protect)
 	con->vanguard = 0;
 }
 
-/* Preserve normal-screen output before an explicit erase-display command. */
-SHL_EXPORT
-void tsm_screen_save_scrollback(struct tsm_screen *con)
-{
-	int top, bottom;
-
-	if (!con->sb_max || (con->flags & TSM_SCREEN_ALTERNATE))
-		return;
-
-	top = con->margin_top;
-	bottom = con->margin_bottom;
-	con->margin_top = 0;
-	con->margin_bottom = con->size_y - 1;
-	screen_inc_age(con);
-	screen_scroll_up(con, con->vanguard + 1);
-	con->margin_top = top;
-	con->margin_bottom = bottom;
-}
-
 SHL_EXPORT
 void tsm_screen_set_color(struct tsm_screen *con, int c,
 			  uint8_t r, uint8_t g, uint8_t b)
