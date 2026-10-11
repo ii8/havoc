@@ -158,7 +158,6 @@ struct tsm_vte {
 	tsm_vte_write_cb write_cb;
 	void *data;
 	tsm_vte_sync_cb sync_cb;
-	void *sync_data;
 
 	struct tsm_utf8_mach *mach;
 	unsigned long parse_cnt;
@@ -539,15 +538,20 @@ static void sync_update(struct tsm_vte *vte, bool enabled)
 	if (enabled) vte->flags |= FLAG_SYNCHRONIZED_UPDATE;
 	else vte->flags &= ~FLAG_SYNCHRONIZED_UPDATE;
 	if (previous != enabled && vte->sync_cb)
-		vte->sync_cb(vte, enabled, vte->sync_data);
+		vte->sync_cb(vte, enabled);
 }
 
 SHL_EXPORT
-void tsm_vte_set_sync_cb(struct tsm_vte *vte, tsm_vte_sync_cb cb, void *data)
+void tsm_vte_set_sync_cb(struct tsm_vte *vte, tsm_vte_sync_cb cb)
 {
 	vte->sync_cb = cb;
-	vte->sync_data = data;
-	if (cb) cb(vte, !!(vte->flags & FLAG_SYNCHRONIZED_UPDATE), data);
+	if (cb) cb(vte, !!(vte->flags & FLAG_SYNCHRONIZED_UPDATE));
+}
+
+SHL_EXPORT
+void tsm_vte_end_sync(struct tsm_vte *vte)
+{
+	sync_update(vte, false);
 }
 
 /*
@@ -1634,17 +1638,12 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
 			/* DECSTR: Soft Reset */
 			csi_soft_reset(vte);
 		} else if (vte->csi_flags & CSI_CASH) {
-			/* DECRQM: synchronized-update state. */
-			if (vte->csi_flags == (CSI_WHAT | CSI_CASH)) {
-				int i;
-				for (i = 0; i < vte->csi_argc; ++i) {
-					int mode = vte->csi_argv[i], state;
-					char reply[32];
-					if (mode != 2026) continue;
-					state = vte->flags & FLAG_SYNCHRONIZED_UPDATE ? 1 : 2;
-					int len = snprintf(reply, sizeof(reply), "\033[?%d;%d$y", mode, state);
-					vte_write(vte, reply, len);
-				}
+			/* DECRQM: query one DEC private mode. */
+			if (vte->csi_flags == (CSI_WHAT | CSI_CASH) &&
+			    vte->csi_argc == 1 && vte->csi_argv[0] == 2026) {
+				const char *reply = vte->flags & FLAG_SYNCHRONIZED_UPDATE
+					? "\033[?2026;1$y" : "\033[?2026;2$y";
+				vte_write(vte, reply, strlen(reply));
 			}
 		} else {
 			/* DECSCL: Compatibility Level */
