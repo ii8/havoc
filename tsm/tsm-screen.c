@@ -1053,6 +1053,21 @@ void tsm_screen_write(struct tsm_screen *con, tsm_symbol_t ch,
 
 	len = tsm_symbol_get_width(con->sym_table, ch);
 	if (!len) {
+		struct cell *cell;
+		int x = con->cursor_x;
+
+		if (!x || con->cursor_y >= con->size_y)
+			return;
+		if (x > con->size_x)
+			x = con->size_x;
+		cell = &con->lines[con->cursor_y]->cells[--x];
+		while (!cell->width && x > 0)
+			cell = &con->lines[con->cursor_y]->cells[--x];
+		if (!cell->ch || !cell->width)
+			return;
+		screen_inc_age(con);
+		cell->ch = tsm_symbol_append(con->sym_table, cell->ch, ch);
+		cell->age = con->age_cnt;
 		return;
 	} else if (len < 0) {
 		ch = 0x0000fffd;
