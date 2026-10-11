@@ -32,7 +32,7 @@
 int font_init(char *);
 void font_scale(int, int *, int *);
 void font_deinit(void);
-unsigned char *get_glyph(uint32_t, uint32_t, int);
+unsigned char *get_glyph(uint32_t, const uint32_t *, size_t, int);
 
 enum deco {
 	DECO_AUTO,
@@ -719,8 +719,7 @@ static void draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 			blank(dst, char_width,
 			      a->br, a->bg, a->bb, term.cfg.opacity);
 	} else {
-		/* todo, combining marks */
-		unsigned char *g = get_glyph(id, ch[0], char_width);
+		unsigned char *g = get_glyph(id, ch, len, char_width);
 
 		if (a->inverse)
 			print(dst, char_width,
