@@ -123,6 +123,7 @@ struct tsm_screen_attr {
 	uint8_t br;			/* background red */
 	uint8_t bg;			/* background green */
 	uint8_t bb;			/* background blue */
+	unsigned int italic : 1;		/* italic character */
 	unsigned int bold : 1;		/* bold character */
 	unsigned int underline : 1;	/* underlined character */
 	unsigned int inverse : 1;	/* inverse colors */

@@ -21,6 +21,7 @@
 #include <wayland-cursor.h>
 
 #include "tsm/libtsm.h"
+#include "glyph.h"
 #include "xdg-shell.h"
 #include "primary-selection-unstable-v1.h"
 #include "xdg-decoration-unstable-v1.h"
@@ -28,11 +29,6 @@
 #include "viewporter.h"
 
 #define ARRAY_LENGTH(a) (sizeof (a) / sizeof (a)[0])
-
-int font_init(char *);
-void font_scale(int, int *, int *);
-void font_deinit(void);
-unsigned char *get_glyph(uint32_t, uint32_t, int);
 
 enum deco {
 	DECO_AUTO,
@@ -83,6 +79,7 @@ static struct {
 
 	int col, row;
 	int cwidth, cheight;
+	struct font *font[FONT_COUNT];
 	int width, height, scale;
 	int pendingwidth, pendingheight;
 	int confwidth, confheight;
@@ -197,7 +194,7 @@ static struct {
 		unsigned char opacity;
 		enum deco decorations;
 		int font_size;
-		char font_path[512];
+		char font_path[FONT_COUNT][512];
 	} cfg;
 } term = {
 	.scale = 120,
@@ -212,7 +209,7 @@ static struct {
 	.cfg.opacity = 0xff,
 	.cfg.decorations = DECO_AUTO,
 	.cfg.font_size = 18,
-	.cfg.font_path = "",
+	.cfg.font_path = { "" },
 	.opt.app_id = "havoc"
 };
 
@@ -697,6 +694,18 @@ static void print(uint32_t *dst, int w,
 	}
 }
 
+static struct font *cell_font(const struct tsm_screen_attr *a, uint32_t ch)
+{
+	int style = (a->bold ? FONT_BOLD : 0) | (a->italic ? FONT_ITALIC : 0);
+	struct font *f = term.font[style];
+
+	if (!f && style == FONT_BOLD_ITALIC)
+		f = term.font[FONT_BOLD] ? term.font[FONT_BOLD] : term.font[FONT_ITALIC];
+	if (!f || (f != term.font[FONT_REGULAR] && !font_has_glyph(f, ch)))
+		f = term.font[FONT_REGULAR];
+	return f;
+}
+
 static void draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 		      size_t len, int char_width, int x, int y,
 		      const struct tsm_screen_attr *a, tsm_age_t age,
@@ -720,7 +729,7 @@ static void draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 			      a->br, a->bg, a->bb, term.cfg.opacity);
 	} else {
 		/* todo, combining marks */
-		unsigned char *g = get_glyph(id, ch[0], char_width);
+		unsigned char *g = get_glyph(cell_font(a, ch[0]), id, ch[0], char_width);
 
 		if (a->inverse)
 			print(dst, char_width,
@@ -1593,10 +1602,20 @@ static void do_configure(void)
 	}
 }
 
+static void scale_fonts(int size)
+{
+	int i;
+	struct font *regular = term.font[FONT_REGULAR];
+
+	font_scale(regular, size, NULL);
+	font_size(regular, &term.cwidth, &term.cheight);
+	for (i = 1; i < FONT_COUNT; ++i)
+		if (term.font[i]) font_scale(term.font[i], size, regular);
+}
+
 static void rescale_font(void)
 {
-	font_scale((term.cfg.font_size * term.scale + 60) / 120,
-		   &term.cwidth, &term.cheight);
+	scale_fonts((term.cfg.font_size * term.scale + 60) / 120);
 
 	if (term.configured) {
 		do_configure();
@@ -1888,11 +1907,17 @@ static void terminal_config(char *key, char *val)
 
 static void font_config(char *key, char *val)
 {
+	static const char *paths[FONT_COUNT] = { "path", "bold", "italic", "bold italic" };
+	size_t i;
+
 	if (strcmp(key, "size") == 0)
 		term.cfg.font_size = cfg_num(val, 10, 6, 300);
-	else if (strcmp(key, "path") == 0)
-		strncpy(term.cfg.font_path, val,
-			sizeof(term.cfg.font_path) - 1);
+	else {
+		for (i = 0; i < FONT_COUNT; ++i)
+			if (strcmp(key, paths[i]) == 0)
+				strncpy(term.cfg.font_path[i], val,
+				        sizeof(term.cfg.font_path[i]) - 1);
+	}
 }
 
 static void bind_config(char *key, char *val)
@@ -2134,9 +2159,21 @@ retry:
 
 #define fail(e, s) { fprintf(stderr, s "\n"); goto e; }
 
-	if (font_init(term.cfg.font_path) < 0)
-		fail(efont, "could not load font");
-	font_scale(term.cfg.font_size, &term.cwidth, &term.cheight);
+	term.font[FONT_REGULAR] = font_init(term.cfg.font_path[FONT_REGULAR]);
+	if (!term.font[FONT_REGULAR]) {
+		fprintf(stderr, "could not load font '%s', using fallback font\n",
+		        term.cfg.font_path[FONT_REGULAR]);
+		term.font[FONT_REGULAR] = font_init(NULL);
+	}
+	if (!term.font[FONT_REGULAR]) fail(efont, "could not load fallback font");
+	for (i = 1; i < FONT_COUNT; ++i) {
+		if (!*term.cfg.font_path[i]) continue;
+		term.font[i] = font_init(term.cfg.font_path[i]);
+		if (!term.font[i])
+			fprintf(stderr, "could not load style font '%s', using regular font\n",
+			        term.cfg.font_path[i]);
+	}
+	scale_fonts(term.cfg.font_size);
 
 	term.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 	if (term.xkb_ctx == NULL)
@@ -2322,7 +2359,7 @@ econnect:
 	xkb_compose_state_unref(term.xkb_compose_state);
 	xkb_context_unref(term.xkb_ctx);
 exkb:
-	font_deinit();
+	for (i = 0; i < FONT_COUNT; ++i) font_deinit(term.font[i]);
 efont:
 	b = term.binding;
 	while (b) {
