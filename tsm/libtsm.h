@@ -255,6 +255,9 @@ typedef void (*tsm_vte_write_cb) (struct tsm_vte *vte,
 				  size_t len,
 				  void *data);
 
+typedef void (*tsm_vte_sync_cb) (struct tsm_vte *vte, bool enabled, void *data);
+void tsm_vte_set_sync_cb(struct tsm_vte *vte, tsm_vte_sync_cb cb, void *data);
+
 int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
 		tsm_vte_write_cb write_cb, void *data);
 void tsm_vte_ref(struct tsm_vte *vte);
