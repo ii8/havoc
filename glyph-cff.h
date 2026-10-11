@@ -635,4 +635,3 @@ static int cff_bounds(const struct cff_font *info, int glyph_index,
 	if (y1)  *y1 = r ? c.max_y : 0;
 	return r ? c.num_vertices : 0;
 }
-
