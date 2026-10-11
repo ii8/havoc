@@ -30,9 +30,10 @@ struct node {
 	struct node *link[2];
 	uint32_t ch;
 	unsigned char *bitmap;
+	int width;
 };
 
-static struct node leaf = { false, { NULL, NULL }, 0, NULL };
+static struct node leaf = { false, { NULL, NULL }, 0, NULL, 0 };
 
 struct font {
 	unsigned char *data;
@@ -1371,7 +1372,7 @@ static struct node *rotate2(struct node *node, int dir)
 	return rotate(node, dir);
 }
 
-static struct node *new_entry(uint32_t ch, bool red, unsigned char *bitmap)
+static struct node *new_entry(uint32_t ch, bool red, unsigned char *bitmap, int width)
 {
 	struct node *n;
 
@@ -1380,12 +1381,13 @@ static struct node *new_entry(uint32_t ch, bool red, unsigned char *bitmap)
 	n->red = red;
 	n->ch = ch;
 	n->bitmap = bitmap;
+	n->width = width;
 	return n;
 }
 
-static void cache(struct node **root, uint32_t ch, unsigned char *bitmap)
+static void cache(struct node **root, uint32_t ch, unsigned char *bitmap, int width)
 {
-	struct node fake = { false, { NULL, *root }, 0, NULL };
+	struct node fake = { false, { NULL, *root }, 0, NULL, 0 };
 	struct node *i = *root;
 	struct node *p, *g, *gg;
 	int dir = 0, last;
@@ -1395,7 +1397,7 @@ static void cache(struct node **root, uint32_t ch, unsigned char *bitmap)
 	last = 0;
 
 	if (*root == &leaf) {
-		*root = new_entry(ch, false, bitmap);
+		*root = new_entry(ch, false, bitmap, width);
 		return;
 	}
 
@@ -1404,7 +1406,7 @@ static void cache(struct node **root, uint32_t ch, unsigned char *bitmap)
 
 	for (; ; ) {
 		if (i == &leaf)
-			p->link[dir] = i = new_entry(ch, true, bitmap);
+			p->link[dir] = i = new_entry(ch, true, bitmap, width);
 		else if (i->link[0]->red && i->link[1]->red)
 			flip(i);
 
@@ -1445,11 +1447,11 @@ static void delete_cache(struct node *n)
 	free(n);
 }
 
-static unsigned char *lookup(struct node *n, uint32_t ch)
+static struct node *lookup(struct node *n, uint32_t ch)
 {
-	while (n) {
+	while (n != &leaf) {
 		if (n->ch == ch) {
-			return n->bitmap;
+			return n;
 		}
 		n = n->link[n->ch < ch];
 	}
@@ -1457,11 +1459,12 @@ static unsigned char *lookup(struct node *n, uint32_t ch)
 	return NULL;
 }
 
-unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth)
+unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth, int *width)
 {
 	struct vertex *vertices;
 	int xmin, ymin;
 	int glyph = find_index(&font, c);
+	int offset = glyph_offset(&font, glyph);
 	float leftb = get_bearing(&font, glyph) * font.scale;
 	int vcount = glyph_shape(&font, glyph, &vertices);
 	struct bitmap bm = {
@@ -1471,26 +1474,34 @@ unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth)
 		NULL
 	};
 
-	bm.pixels = calloc(1, bm.w * bm.h);
-
 	get_glyph_origin(&font, glyph, &xmin, &ymin);
+	if (offset >= 0) {
+		int right = ceil(read_short(font.data + offset + 6) *
+		                 font.scale + leftb) - xmin;
+		if (right > bm.w) bm.w = right;
+	}
+	bm.stride = bm.w;
+	bm.pixels = calloc(1, bm.w * bm.h);
 	render(&bm, 0.35f, vertices, vcount, font.scale, font.scale,
 	       leftb, font.ascent + ymin, xmin, ymin, 1);
 
 	free(vertices);
 
-	cache(&font.cache, id, bm.pixels);
+	cache(&font.cache, id, bm.pixels, bm.w);
+	*width = bm.w;
 	return bm.pixels;
 }
 
-unsigned char *get_glyph(uint32_t id, uint32_t c, int cwidth)
+unsigned char *get_glyph(uint32_t id, uint32_t c, int cwidth, int *width)
 {
-	unsigned char *buf = lookup(font.cache, id);
+	struct node *n = lookup(font.cache, id);
 
-	if (buf)
-		return buf;
-	else
-		return new_glyph(id, c, cwidth);
+	if (n) {
+		*width = n->width;
+		return n->bitmap;
+	} else {
+		return new_glyph(id, c, cwidth, width);
+	}
 }
 
 static int get_width(struct font *f)

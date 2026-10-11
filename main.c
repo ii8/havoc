@@ -32,7 +32,7 @@
 int font_init(char *);
 void font_scale(int, int *, int *);
 void font_deinit(void);
-unsigned char *get_glyph(uint32_t, uint32_t, int);
+unsigned char *get_glyph(uint32_t, uint32_t, int, int *);
 
 enum deco {
 	DECO_AUTO,
@@ -666,12 +666,10 @@ static void blank(uint32_t *dst, int w, u8 br, u8 bg, u8 bb, u8 ba)
 static void print(uint32_t *dst, int w,
 		  u8 br, u8 bg, u8 bb,
 		  u8 fr, u8 fg, u8 fb,
-		  u8 ba, unsigned char *glyph)
+		  u8 ba, unsigned char *glyph, int stride)
 {
 	int i;
 	int h = term.cheight;
-
-	w *= term.cwidth;
 
 	br = mul(br, ba);
 	bg = mul(bg, ba);
@@ -692,8 +690,69 @@ static void print(uint32_t *dst, int w,
 			}
 		}
 
-		glyph += w;
+		glyph += stride;
 		dst += term.width;
+	}
+}
+
+struct render_cell {
+	uint32_t id, ch;
+	int width;
+	struct tsm_screen_attr attr;
+};
+
+struct render_row {
+	struct buffer *buffer;
+	struct render_cell *cells;
+	bool changed;
+};
+
+static void draw_row(struct render_row *row, int y)
+{
+	uint32_t *dst = row->buffer->data;
+	int x;
+
+	dst += (term.margin.top + y * term.cheight) * term.width + term.margin.left;
+	/* Paint backgrounds first so spaces cannot erase a preceding glyph. */
+	for (x = 0; x < term.col; ++x) {
+		struct render_cell *cell = &row->cells[x];
+		struct tsm_screen_attr *a = &cell->attr;
+		blank(dst + x * term.cwidth,
+		      cell->width < term.col - x ? cell->width : term.col - x,
+		      a->inverse ? ~a->br : a->br,
+		      a->inverse ? ~a->bg : a->bg,
+		      a->inverse ? ~a->bb : a->bb, term.cfg.opacity);
+	}
+	for (x = 0; x < term.col; ++x) {
+		struct render_cell *cell = &row->cells[x];
+		struct tsm_screen_attr *a = &cell->attr;
+		int stride, width, available = cell->width;
+		unsigned char *g;
+
+		if (available > term.col - x) available = term.col - x;
+
+		if (!cell->ch || !cell->width) continue;
+		g = get_glyph(cell->id, cell->ch, cell->width, &stride);
+		while (available * term.cwidth < stride && x + available < term.col) {
+			struct render_cell *next = &row->cells[x + available];
+			/* Respect occupied cells, cursor/selection and background changes. */
+			if (next->ch || next->width != 1 ||
+			    next->attr.inverse != a->inverse ||
+			    next->attr.br != a->br || next->attr.bg != a->bg ||
+			    next->attr.bb != a->bb)
+				break;
+			++available;
+		}
+		width = available * term.cwidth;
+		if (width > stride) width = stride;
+		print(dst + x * term.cwidth, width,
+		      a->inverse ? ~a->br : a->br,
+		      a->inverse ? ~a->bg : a->bg,
+		      a->inverse ? ~a->bb : a->bb,
+		      a->inverse ? ~a->fr : a->fr,
+		      a->inverse ? ~a->fg : a->fg,
+		      a->inverse ? ~a->fb : a->fb,
+		      term.cfg.opacity, g, stride);
 	}
 }
 
@@ -702,37 +761,18 @@ static void draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 		      const struct tsm_screen_attr *a, tsm_age_t age,
 		      void *data)
 {
-	struct buffer *buffer = data;
-	uint32_t *dst = buffer->data;
+	struct render_row *row = data;
+	struct render_cell *cell = &row->cells[x];
 
-	if (age && age <= buffer->age)
-		return;
-
-	dst += term.margin.top * term.width + term.margin.left;
-	dst = &dst[y * term.cheight * term.width + x * term.cwidth];
-
-	if (len == 0) {
-		if (a->inverse)
-			blank(dst, char_width,
-			      ~a->br, ~a->bg, ~a->bb, term.cfg.opacity);
-		else
-			blank(dst, char_width,
-			      a->br, a->bg, a->bb, term.cfg.opacity);
-	} else {
-		/* todo, combining marks */
-		unsigned char *g = get_glyph(id, ch[0], char_width);
-
-		if (a->inverse)
-			print(dst, char_width,
-			      ~a->br, ~a->bg, ~a->bb,
-			      ~a->fr, ~a->fg, ~a->fb,
-			      term.cfg.opacity, g);
-		else
-			print(dst, char_width,
-			      a->br, a->bg, a->bb,
-			      a->fr, a->fg, a->fb,
-			      term.cfg.opacity, g);
-	}
+	if (x == 0) row->changed = false;
+	cell->id = id;
+	/* todo, combining marks */
+	cell->ch = len ? ch[0] : 0;
+	cell->width = char_width;
+	cell->attr = *a;
+	if (!age || age > row->buffer->age) row->changed = true;
+	/* Neighbour changes can reveal or erase a glyph's overhang. */
+	if (x == term.col - 1 && row->changed) draw_row(row, y);
 }
 
 static void draw_margin(struct buffer *buffer)
@@ -777,6 +817,7 @@ static const struct wl_callback_listener frame_listener = {
 static void redraw(void)
 {
 	struct buffer *buffer = swap_buffers();
+	struct render_row row;
 
 	if (buffer == NULL) {
 		fprintf(stderr, "no buffer available, cannot redraw\n");
@@ -786,7 +827,11 @@ static void redraw(void)
 	wl_surface_attach(term.surf, buffer->b, 0, 0);
 	if ((term.cfg.margin || term.cfg.padding) && buffer->age == 0)
 		draw_margin(buffer);
-	buffer->age = tsm_screen_draw(term.screen, draw_cell, buffer);
+	row.buffer = buffer;
+	row.cells = malloc(term.col * sizeof(*row.cells));
+	if (!row.cells) abort();
+	buffer->age = tsm_screen_draw(term.screen, draw_cell, &row);
+	free(row.cells);
 	if (buffer->age == 0)
 		term.buf[0].age = term.buf[1].age = 0;
 	wl_surface_damage_buffer(term.surf, 0, 0, term.width, term.height);
