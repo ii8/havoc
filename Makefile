@@ -60,6 +60,9 @@ havoc: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
 
 $(OBJ): $(GEN)
+main.o glyph.o: glyph.h
+main.o $(filter tsm/%, $(OBJ)): tsm/libtsm.h
+glyph.o: glyph-cff.h fallback.h
 
 .c.o:
 	$(CC) $(PKG_CFLAGS) $(CFLAGS) $(CDEFS) -c $< -o $@
