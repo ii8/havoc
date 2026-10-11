@@ -52,6 +52,7 @@ static struct {
 	bool configured;
 	bool need_redraw;
 	bool can_redraw;
+	long long sync_deadline;
 	int resize;
 
 	int master_fd;
@@ -257,6 +258,7 @@ static void handle_tty(int ev)
 	if (ev & POLLHUP && len == 0) {
 		close(term.master_fd);
 		term.master_fd = -1;
+		term.sync_deadline = 0;
 		if (!term.opt.linger)
 			term.die = true;
 	}
@@ -268,6 +270,24 @@ static long long now(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &t);
 	return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static void sync_update(struct tsm_vte *vte, bool enabled, void *data)
+{
+	/* Limit a broken application's hold without changing its mode register. */
+	term.sync_deadline = enabled ? now() + 150 : 0;
+	term.need_redraw = true;
+}
+
+static int redraw_timeout(void)
+{
+	int timeout = term.repeat.timeout;
+	if (term.sync_deadline) {
+		long long remaining = term.sync_deadline - now();
+		if (remaining <= 0) term.sync_deadline = 0;
+		else if (timeout < 0 || remaining < timeout) timeout = remaining;
+	}
+	return timeout;
 }
 
 static void handle_repeat(void)
@@ -2169,6 +2189,7 @@ retry:
 
 	if (tsm_vte_new(&term.vte, term.screen, wcb, NULL) < 0)
 		fail(evte, "failed to create tsm vte");
+	tsm_vte_set_sync_cb(term.vte, sync_update, NULL);
 
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)
@@ -2236,13 +2257,15 @@ retry:
 	};
 
 	while (!term.die) {
-		if (term.can_redraw && term.need_redraw && term.configured)
+		int timeout = redraw_timeout();
+		if (term.can_redraw && term.need_redraw && term.configured &&
+		    !term.sync_deadline)
 			redraw();
 
 		wl_display_flush(term.display);
 
 		pollfds[EV_PASTE].fd = term.paste.fd[0];
-		n = poll(pollfds, NUM_POLLFDS, term.repeat.timeout);
+		n = poll(pollfds, NUM_POLLFDS, timeout);
 		if (n < 0) {
 			error("poll error");
 			abort();

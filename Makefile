@@ -60,6 +60,7 @@ havoc: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
 
 $(OBJ): $(GEN)
+main.o $(filter tsm/%, $(OBJ)): tsm/libtsm.h
 
 .c.o:
 	$(CC) $(PKG_CFLAGS) $(CFLAGS) $(CDEFS) -c $< -o $@
