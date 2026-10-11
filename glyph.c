@@ -52,6 +52,7 @@ struct font {
 
 	int width, height;
 	int ascent;
+	int underline, underline_thickness;
 	float scale;
 
 	struct node *cache;
@@ -1572,6 +1573,7 @@ int font_init(char *path)
 void font_scale(int size, int *w, int *h)
 {
 	int descent, linegap;
+	uint32_t post;
 
 	delete_cache(font.cache);
 	font.cache = &leaf;
@@ -1588,8 +1590,27 @@ void font_scale(int size, int *w, int *h)
 	font.width = ceil(font.scale * font.width);
 	font.height = ceil(font.scale * font.height);
 
+	post = find_table(font.data, 0, "post");
+	font.underline = font.ascent + (size / 12 ? size / 12 : 1);
+	font.underline_thickness = size / 16 ? size / 16 : 1;
+	if (post) {
+		font.underline = font.ascent - round(read_short(font.data + post + 8) * font.scale);
+		font.underline_thickness = round(read_short(font.data + post + 10) * font.scale);
+	}
+	if (font.underline_thickness < 1) font.underline_thickness = 1;
+	if (font.underline_thickness > font.height) font.underline_thickness = font.height;
+	if (font.underline < 0) font.underline = 0;
+	if (font.underline > font.height - font.underline_thickness)
+		font.underline = font.height - font.underline_thickness;
+
 	*w = font.width;
 	*h = font.height;
+}
+
+void font_underline(int *position, int *thickness)
+{
+	*position = font.underline;
+	*thickness = font.underline_thickness;
 }
 
 void font_deinit(void)
