@@ -1907,7 +1907,9 @@ static void terminal_config(char *key, char *val)
 
 static void font_config(char *key, char *val)
 {
-	static const char *paths[FONT_COUNT] = { "path", "bold", "italic", "bold italic" };
+	static const char *paths[FONT_COUNT] = {
+		"path", "bold", "italic", "bold italic"
+	};
 	size_t i;
 
 	if (strcmp(key, "size") == 0)

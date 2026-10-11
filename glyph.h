@@ -16,6 +16,6 @@ void font_size(const struct font *font, int *width, int *height);
 bool font_has_glyph(const struct font *font, uint32_t character);
 void font_deinit(struct font *font);
 unsigned char *get_glyph(struct font *font, uint32_t id,
-                         uint32_t character, int cell_width);
+			 uint32_t character, int cell_width);
 
 #endif

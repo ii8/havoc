@@ -35,30 +35,6 @@ struct node {
 
 static struct node leaf = { false, { NULL, NULL }, 0, NULL };
 
-enum {
-	VMOVE = 1,
-	VLINE,
-	VCURVE,
-	VCUBIC
-};
-
-struct vertex {
-	short x, y, cx, cy, cx1, cy1;
-	unsigned char type, padding;
-};
-
-static void vinit(struct vertex *v, uint8_t type, int32_t x, int32_t y,
-		  int32_t cx, int32_t cy)
-{
-	v->type = type;
-	v->x = (int16_t)x;
-	v->y = (int16_t)y;
-	v->cx = (int16_t)cx;
-	v->cy = (int16_t)cy;
-}
-
-#include "glyph-cff.h"
-
 struct font {
 	unsigned char *data;
 	size_t size;
@@ -80,9 +56,18 @@ struct font {
 	float scale;
 
 	struct node *cache;
-	struct cff_font cff;
 };
 
+enum {
+	VMOVE = 1,
+	VLINE,
+	VCURVE
+};
+
+struct vertex {
+	short x, y, cx, cy;
+	unsigned char type, padding;
+};
 
 struct bitmap {
 	int w, h, stride;
@@ -101,8 +86,7 @@ struct bitmap {
 
 static uint16_t read_ushort(const struct font *f, const uint8_t *p)
 {
-	if ((uintptr_t)p < (uintptr_t)f->data || f->size < 2 ||
-	    (uintptr_t)p - (uintptr_t)f->data > f->size - 2) {
+	if (p < f->data || p + 1 > f->data + f->size - 1) {
 		fprintf(stderr, "font file is corrupt\n");
 		return 0;
 	}
@@ -112,8 +96,7 @@ static uint16_t read_ushort(const struct font *f, const uint8_t *p)
 
 static int16_t read_short(const struct font *f, const uint8_t *p)
 {
-	if ((uintptr_t)p < (uintptr_t)f->data || f->size < 2 ||
-	    (uintptr_t)p - (uintptr_t)f->data > f->size - 2) {
+	if (p < f->data || p + 1 > f->data + f->size - 1) {
 		fprintf(stderr, "font file is corrupt\n");
 		return 0;
 	}
@@ -123,34 +106,25 @@ static int16_t read_short(const struct font *f, const uint8_t *p)
 
 static uint32_t read_ulong(const struct font *f, const uint8_t *p)
 {
-	if ((uintptr_t)p < (uintptr_t)f->data || f->size < 4 ||
-	    (uintptr_t)p - (uintptr_t)f->data > f->size - 4) {
+	if (p < f->data || p + 3 > f->data + f->size - 1) {
 		fprintf(stderr, "font file is corrupt\n");
 		return 0;
 	}
 
-	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
-	       (uint32_t)p[2] << 8 | p[3];
+	return p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3];
 }
 
-static uint32_t find_table(const struct font *f, uint32_t fontstart, const char *tag, uint32_t *length)
+static uint32_t find_table(const struct font *f, uint8_t *data,
+			   uint32_t fontstart, const char *tag)
 {
-	uint8_t *data = f->data;
-	uint32_t i, num_tables = read_ushort(f, data + fontstart + 4);
+	int32_t i, num_tables = read_ushort(f, data + fontstart + 4);
 	uint32_t tabledir = fontstart + 12;
 
-	if (tabledir > f->size || num_tables > (f->size - tabledir) / 16)
-		return 0;
 	for (i = 0; i < num_tables; ++i) {
 		uint8_t *loc = data + (tabledir + 16 * i);
 
-		if (memcmp(loc, tag, 4) == 0) {
-			uint32_t offset = read_ulong(f, loc + 8);
-			uint32_t size = read_ulong(f, loc + 12);
-			if (offset > f->size || size > f->size - offset) return 0;
-			if (length) *length = size;
-			return offset;
-		}
+		if (strncmp((char *)loc, tag, 4) == 0)
+			return read_ulong(f, loc + 8);
 	}
 
 	return 0;
@@ -165,25 +139,16 @@ static int setup(struct font *f, int fontstart)
 	data = f->data;
 	f->fontstart = fontstart;
 
-	cmap = find_table(f, fontstart, "cmap", NULL);
-	f->loca = find_table(f, fontstart, "loca", NULL);
-	f->head = find_table(f, fontstart, "head", NULL);
-	f->glyf = find_table(f, fontstart, "glyf", NULL);
-	f->hhea = find_table(f, fontstart, "hhea", NULL);
-	f->hmtx = find_table(f, fontstart, "hmtx", NULL);
-	if (!cmap || !f->head || !f->hhea || !f->hmtx)
+	cmap = find_table(f, data, fontstart, "cmap");
+	f->loca = find_table(f, data, fontstart, "loca");
+	f->head = find_table(f, data, fontstart, "head");
+	f->glyf = find_table(f, data, fontstart, "glyf");
+	f->hhea = find_table(f, data, fontstart, "hhea");
+	f->hmtx = find_table(f, data, fontstart, "hmtx");
+	if (!cmap || !f->loca || !f->head || !f->glyf || !f->hhea || !f->hmtx)
 		return -1;
-	if (f->glyf) {
-		if (!f->loca) return -1;
-	} else {
-		uint32_t length;
-		uint32_t cff = find_table(f, fontstart, "CFF ", &length);
-		if (!cff || cff >= f->size ||
-		    !cff_init(&f->cff, data + cff, length))
-			return -1;
-	}
 
-	t = find_table(f, fontstart, "maxp", NULL);
+	t = find_table(f, data, fontstart, "maxp");
 	if (t)
 		f->num_glyphs = read_ushort(f, data + t + 4);
 	else
@@ -318,6 +283,16 @@ static int find_index(const struct font *f, uint32_t codepoint)
 	return 0;
 }
 
+static void vinit(struct vertex *v, uint8_t type, int32_t x, int32_t y,
+		  int32_t cx, int32_t cy)
+{
+	v->type = type;
+	v->x = (int16_t)x;
+	v->y = (int16_t)y;
+	v->cx = (int16_t)cx;
+	v->cy = (int16_t)cy;
+}
+
 static int glyph_offset(const struct font *f, int glyph_index)
 {
 	int g1, g2;
@@ -372,11 +347,7 @@ static int glyph_shape(const struct font *f, int glyph_index,
 	uint8_t *contour_ends;
 	struct vertex *vertices = 0;
 	int vcount = 0;
-	int g;
-
-	if (f->cff.cff.size)
-		return cff_shape(&f->cff, glyph_index, pvertices);
-	g = glyph_offset(f, glyph_index);
+	int g = glyph_offset(f, glyph_index);
 
 	*pvertices = NULL;
 	if (g < 0)
@@ -649,15 +620,7 @@ static int get_linegap(struct font *f)
 
 static void get_glyph_origin(struct font *f, int glyph, int *x, int *y)
 {
-	int g;
-	if (f->cff.cff.size) {
-		int x0, y1;
-		cff_bounds(&f->cff, glyph, &x0, NULL, NULL, &y1);
-		*x = floor(x0 * f->scale);
-		*y = floor(-y1 * f->scale);
-		return;
-	}
-	g = glyph_offset(f, glyph);
+	int g = glyph_offset(f, glyph);
 
 	if (g < 0) {
 		*x = 0, *y = 0;
@@ -1280,54 +1243,6 @@ static int tesselate_curve(struct point *points, int *num_points, float x0,
 	return 1;
 }
 
-static void tesselate_cubic(struct point *points, int *num_points,
-                            float x0, float y0, float x1, float y1,
-                            float x2, float y2, float x3, float y3,
-                            float objspace_flatness_squared, int n)
-{
-	/* Compare the control polygon with the chord before subdivision. */
-	float dx0 = x1-x0;
-	float dy0 = y1-y0;
-	float dx1 = x2-x1;
-	float dy1 = y2-y1;
-	float dx2 = x3-x2;
-	float dy2 = y3-y2;
-	float dx = x3-x0;
-	float dy = y3-y0;
-	float longlen = sqrt(dx0*dx0 + dy0*dy0) + sqrt(dx1*dx1 + dy1*dy1) +
-	                sqrt(dx2*dx2 + dy2*dy2);
-	float shortlen = sqrt(dx*dx + dy*dy);
-	float flatness_squared = longlen*longlen-shortlen*shortlen;
-
-	if (n > 16) // 65536 segments on one curve better be enough!
-		return;
-
-	if (flatness_squared > objspace_flatness_squared) {
-		float x01 = (x0+x1)/2;
-		float y01 = (y0+y1)/2;
-		float x12 = (x1+x2)/2;
-		float y12 = (y1+y2)/2;
-		float x23 = (x2+x3)/2;
-		float y23 = (y2+y3)/2;
-
-		float xa = (x01+x12)/2;
-		float ya = (y01+y12)/2;
-		float xb = (x12+x23)/2;
-		float yb = (y12+y23)/2;
-
-		float mx = (xa+xb)/2;
-		float my = (ya+yb)/2;
-
-		tesselate_cubic(points, num_points, x0,y0, x01,y01, xa,ya, mx,my,
-		                objspace_flatness_squared, n+1);
-		tesselate_cubic(points, num_points, mx,my, xb,yb, x23,y23, x3,y3,
-		                objspace_flatness_squared, n+1);
-	} else {
-		add_point(points, *num_points,x3,y3);
-		*num_points = *num_points+1;
-	}
-}
-
 /* returns number of contours */
 static struct point *flatten(struct vertex *vertices, int num_verts,
 			     float objspace_flatness, int **contour_lengths,
@@ -1376,14 +1291,6 @@ static struct point *flatten(struct vertex *vertices, int num_verts,
 				case VLINE:
 					x = vertices[i].x, y = vertices[i].y;
 					add_point(points, num_points++, x, y);
-					break;
-				case VCUBIC:
-					tesselate_cubic(points, &num_points, x, y,
-					                vertices[i].cx, vertices[i].cy,
-					                vertices[i].cx1, vertices[i].cy1,
-					                vertices[i].x, vertices[i].y,
-					                objspace_flatness_pow2, 0);
-					x = vertices[i].x, y = vertices[i].y;
 					break;
 				case VCURVE:
 					tesselate_curve(points, &num_points,
@@ -1540,7 +1447,7 @@ static void delete_cache(struct node *n)
 
 static unsigned char *lookup(struct node *n, uint32_t ch)
 {
-	while (n != &leaf) {
+	while (n) {
 		if (n->ch == ch) {
 			return n->bitmap;
 		}
@@ -1550,7 +1457,8 @@ static unsigned char *lookup(struct node *n, uint32_t ch)
 	return NULL;
 }
 
-static unsigned char *new_glyph(struct font *f, uint32_t id, uint32_t c, int cwidth)
+static unsigned char *new_glyph(struct font *f, uint32_t id, uint32_t c,
+			       int cwidth)
 {
 	struct vertex *vertices;
 	int xmin, ymin;
@@ -1565,7 +1473,6 @@ static unsigned char *new_glyph(struct font *f, uint32_t id, uint32_t c, int cwi
 	};
 
 	bm.pixels = calloc(1, bm.w * bm.h);
-	if (!bm.pixels) abort();
 
 	get_glyph_origin(f, glyph, &xmin, &ymin);
 	render(&bm, 0.35f, vertices, vcount, f->scale, f->scale,
@@ -1590,12 +1497,12 @@ unsigned char *get_glyph(struct font *f, uint32_t id, uint32_t c, int cwidth)
 static int get_width(struct font *f)
 {
 	int i = find_index(f, 'W');
-	unsigned short advance;
+	short advance;
 
 	if (i < f->num_metrics) {
-		advance = read_ushort(f, f->data + f->hmtx + 4 * i);
+		advance = read_short(f, f->data + f->hmtx + 4 * i);
 	} else {
-		advance = read_ushort(f, f->data + f->hmtx + 4 * (f->num_metrics - 1));
+		advance = read_short(f, f->data + f->hmtx);
 	}
 
 	return advance;
@@ -1611,16 +1518,19 @@ static int open_font(struct font *f, const char *path)
 		f->data = &fallback[0];
 		return 0;
 	}
+
 	fd = open(path, O_RDONLY);
-	if (fd < 0) return -1;
-	if (fstat(fd, &st) < 0 || st.st_size < 12 || st.st_size > INT32_MAX) {
+	if (fd < 0)
+		return -1;
+	if (fstat(fd, &st) < 0) {
 		close(fd);
 		return -1;
 	}
 	f->size = st.st_size;
 	f->data = mmap(NULL, f->size, PROT_READ, MAP_PRIVATE, fd, 0);
 	close(fd);
-	if (f->data == MAP_FAILED) return -1;
+	if (f->data == MAP_FAILED)
+		return -1;
 	f->mmapped = true;
 	return 0;
 }
@@ -1628,19 +1538,15 @@ static int open_font(struct font *f, const char *path)
 struct font *font_init(const char *path)
 {
 	struct font *f = calloc(1, sizeof(*f));
-	if (!f) return NULL;
+
+	if (!f)
+		return NULL;
 	f->cache = &leaf;
 	if (open_font(f, path) < 0 || setup(f, 0) < 0) {
 		font_deinit(f);
 		return NULL;
 	}
 	f->num_metrics = read_ushort(f, f->data + f->hhea + 34);
-	if (!f->num_metrics || get_ascent(f) <= get_descent(f) ||
-	    get_ascent(f) - get_descent(f) + get_linegap(f) <= 0 ||
-	    get_width(f) == 0) {
-		font_deinit(f);
-		return NULL;
-	}
 	return f;
 }
 
@@ -1651,7 +1557,7 @@ void font_scale(struct font *f, int size, const struct font *base)
 	delete_cache(f->cache);
 	f->cache = &leaf;
 	f->scale = (float)size / (ascent - descent);
-	/* Style faces share the regular face's grid and baseline. */
+	/* All style faces use the regular face's grid and baseline. */
 	f->ascent = base ? base->ascent : floor(f->scale * ascent);
 	f->width = base ? base->width : ceil(f->scale * get_width(f));
 	f->height = base ? base->height :
@@ -1671,8 +1577,10 @@ bool font_has_glyph(const struct font *f, uint32_t c)
 
 void font_deinit(struct font *f)
 {
-	if (!f) return;
+	if (!f)
+		return;
 	delete_cache(f->cache);
-	if (f->mmapped) munmap(f->data, f->size);
+	if (f->mmapped)
+		munmap(f->data, f->size);
 	free(f);
 }
