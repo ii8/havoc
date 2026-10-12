@@ -213,20 +213,13 @@ static void link_to_scrollback(struct tsm_screen *con, struct line *line)
 			con->sb_last = NULL;
 		--con->sb_count;
 
-		/* (position == tmp && !next) means we have sb_max=1 so set
-		 * position to the new line. Otherwise, set to new first line.
-		 * If position!=tmp and we have a fixed-position then nothing
-		 * needs to be done because we can stay at the same line. If we
-		 * have no fixed-position, we need to set the position to the
-		 * next inserted line, which can be "line", too. */
-		if (con->sb_pos) {
-			if (con->sb_pos == tmp ||
-			    !(con->flags & TSM_SCREEN_FIXED_POS)) {
-				if (con->sb_pos->next)
-					con->sb_pos = con->sb_pos->next;
-				else
-					con->sb_pos = line;
-			}
+		/* Move the view only when its line is evicted. With sb_max=1,
+		 * the replacement is the line being inserted. */
+		if (con->sb_pos == tmp) {
+			if (tmp->next)
+				con->sb_pos = tmp->next;
+			else
+				con->sb_pos = line;
 		}
 
 		if (con->sel_active) {
