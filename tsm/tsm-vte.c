@@ -154,6 +154,7 @@ struct tsm_vte {
 	unsigned long ref;
 	struct tsm_screen *con;
 	tsm_vte_write_cb write_cb;
+	tsm_vte_title_cb title_cb;
 	void *data;
 
 	struct tsm_utf8_mach *mach;
@@ -308,6 +309,12 @@ int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
 err_free:
 	free(vte);
 	return ret;
+}
+
+SHL_EXPORT
+void tsm_vte_set_title_cb(struct tsm_vte *vte, tsm_vte_title_cb cb)
+{
+	vte->title_cb = cb;
 }
 
 SHL_EXPORT
@@ -1822,6 +1829,11 @@ static void do_osc(struct tsm_vte *vte, uint32_t data)
 	}
 
 	switch(code) {
+	case 0:
+	case 2:
+		if (strchr(vte->osc_arg, ';') && vte->title_cb)
+			vte->title_cb(vte, rest);
+		break;
 	case 4:
 		while (rest[0] != '\0') {
 			char *spec;
