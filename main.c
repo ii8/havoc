@@ -51,7 +51,9 @@ static struct {
 	bool die;
 	bool configured;
 	bool need_redraw;
+	bool tty_redraw;
 	bool can_redraw;
+	long long sync_deadline;
 	int resize;
 
 	int master_fd;
@@ -244,7 +246,7 @@ static void handle_tty(int ev)
 	if (ev & POLLIN) {
 		char data[256];
 
-		term.need_redraw = true;
+		term.tty_redraw = true;
 		len = read(term.master_fd, data, sizeof(data));
 
 		if (len < 0) {
@@ -257,6 +259,7 @@ static void handle_tty(int ev)
 	if (ev & POLLHUP && len == 0) {
 		close(term.master_fd);
 		term.master_fd = -1;
+		tsm_vte_end_sync(term.vte);
 		if (!term.opt.linger)
 			term.die = true;
 	}
@@ -268,6 +271,29 @@ static long long now(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &t);
 	return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static void sync_update(struct tsm_vte *vte, bool enabled)
+{
+	/* Batch application output; local redraws can finish the batch early. */
+	term.sync_deadline = enabled ? now() + 150 : 0;
+	if (!enabled) term.tty_redraw = true;
+}
+
+static int redraw_timeout(void)
+{
+	int timeout = term.repeat.timeout;
+	if (term.sync_deadline) {
+		long long remaining = term.sync_deadline - now();
+		if (remaining <= 0) tsm_vte_end_sync(term.vte);
+		else if (timeout < 0 || remaining < timeout) timeout = remaining;
+	}
+	return timeout;
+}
+
+static bool redraw_pending(void)
+{
+	return term.need_redraw || (term.tty_redraw && !term.sync_deadline);
 }
 
 static void handle_repeat(void)
@@ -783,6 +809,8 @@ static void redraw(void)
 		return;
 	}
 
+	/* Never defer selection, scrollback or other local redraws. */
+	tsm_vte_end_sync(term.vte);
 	wl_surface_attach(term.surf, buffer->b, 0, 0);
 	if ((term.cfg.margin || term.cfg.padding) && buffer->age == 0)
 		draw_margin(buffer);
@@ -798,6 +826,7 @@ static void redraw(void)
 	buffer->busy = true;
 	term.can_redraw = false;
 	term.need_redraw = false;
+	term.tty_redraw = false;
 }
 
 static void paste(bool primary)
@@ -2169,6 +2198,7 @@ retry:
 
 	if (tsm_vte_new(&term.vte, term.screen, wcb, NULL) < 0)
 		fail(evte, "failed to create tsm vte");
+	tsm_vte_set_sync_cb(term.vte, sync_update);
 
 	term.surf = wl_compositor_create_surface(term.cp);
 	if (term.surf == NULL)
@@ -2236,13 +2266,14 @@ retry:
 	};
 
 	while (!term.die) {
-		if (term.can_redraw && term.need_redraw && term.configured)
+		int timeout = redraw_timeout();
+		if (term.can_redraw && redraw_pending() && term.configured)
 			redraw();
 
 		wl_display_flush(term.display);
 
 		pollfds[EV_PASTE].fd = term.paste.fd[0];
-		n = poll(pollfds, NUM_POLLFDS, term.repeat.timeout);
+		n = poll(pollfds, NUM_POLLFDS, timeout);
 		if (n < 0) {
 			error("poll error");
 			abort();

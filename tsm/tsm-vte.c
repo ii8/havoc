@@ -138,6 +138,8 @@ enum parser_action {
 #define FLAG_TITE_INHIBIT_MODE			0x00020000 /* Prevent switching to alternate screen buffer */
 #define FLAG_BRACKETED_PASTE_MODE		0x00040000
 
+#define FLAG_SYNCHRONIZED_UPDATE		0x00080000
+
 #define ENDPASTE "\e[201~"
 
 struct vte_saved_state {
@@ -155,6 +157,7 @@ struct tsm_vte {
 	struct tsm_screen *con;
 	tsm_vte_write_cb write_cb;
 	void *data;
+	tsm_vte_sync_cb sync_cb;
 
 	struct tsm_utf8_mach *mach;
 	unsigned long parse_cnt;
@@ -529,6 +532,28 @@ static void restore_state(struct tsm_vte *vte)
 	}
 }
 
+static void sync_update(struct tsm_vte *vte, bool enabled)
+{
+	bool previous = !!(vte->flags & FLAG_SYNCHRONIZED_UPDATE);
+	if (enabled) vte->flags |= FLAG_SYNCHRONIZED_UPDATE;
+	else vte->flags &= ~FLAG_SYNCHRONIZED_UPDATE;
+	if (previous != enabled && vte->sync_cb)
+		vte->sync_cb(vte, enabled);
+}
+
+SHL_EXPORT
+void tsm_vte_set_sync_cb(struct tsm_vte *vte, tsm_vte_sync_cb cb)
+{
+	vte->sync_cb = cb;
+	if (cb) cb(vte, !!(vte->flags & FLAG_SYNCHRONIZED_UPDATE));
+}
+
+SHL_EXPORT
+void tsm_vte_end_sync(struct tsm_vte *vte)
+{
+	sync_update(vte, false);
+}
+
 /*
  * Reset VTE state
  * This performs a soft reset of the VTE. That is, everything is reset to the
@@ -538,6 +563,7 @@ static void restore_state(struct tsm_vte *vte)
 SHL_EXPORT
 void tsm_vte_reset(struct tsm_vte *vte)
 {
+	sync_update(vte, false);
 	vte->flags = 0;
 	vte->flags |= FLAG_TEXT_CURSOR_MODE;
 	vte->flags |= FLAG_AUTO_REPEAT_MODE;
@@ -1414,6 +1440,9 @@ static void csi_mode(struct tsm_vte *vte, bool set)
 						   vte->alt_cursor_y);
 			}
 			continue;
+		case 2026:
+			sync_update(vte, set);
+			continue;
 		case 2004:
 			set_reset_flag(vte, set, FLAG_BRACKETED_PASTE_MODE);
 			continue;
@@ -1611,9 +1640,13 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
 			/* DECSTR: Soft Reset */
 			csi_soft_reset(vte);
 		} else if (vte->csi_flags & CSI_CASH) {
-			/* DECRQM: Request DEC Private Mode */
-			/* If CSI_WHAT is set, then enable,
-			 * otherwise disable */
+			/* DECRQM: query one DEC private mode. */
+			if (vte->csi_flags == (CSI_WHAT | CSI_CASH) &&
+			    vte->csi_argc == 1 && vte->csi_argv[0] == 2026) {
+				const char *reply = vte->flags & FLAG_SYNCHRONIZED_UPDATE
+					? "\033[?2026;1$y" : "\033[?2026;2$y";
+				vte_write(vte, reply, strlen(reply));
+			}
 		} else {
 			/* DECSCL: Compatibility Level */
 			/* Sometimes CSI_DQUOTE is set here, too */
