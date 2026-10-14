@@ -1457,13 +1457,30 @@ static unsigned char *lookup(struct node *n, uint32_t ch)
 	return NULL;
 }
 
-unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth)
+static void render_character(struct bitmap *bm, uint32_t c, float anchor)
 {
 	struct vertex *vertices;
 	int xmin, ymin;
 	int glyph = find_index(&font, c);
 	float leftb = get_bearing(&font, glyph) * font.scale;
-	int vcount = glyph_shape(&font, glyph, &vertices);
+	int vcount;
+
+	if (anchor && !glyph)
+		return;
+	/* Negative bearings place zero-advance marks after the base glyph.
+	 * Monospace marks with positive bearings already occupy the cell. */
+	if (leftb < 0)
+		leftb += anchor;
+	vcount = glyph_shape(&font, glyph, &vertices);
+	get_glyph_origin(&font, glyph, &xmin, &ymin);
+	render(bm, 0.35f, vertices, vcount, font.scale, font.scale,
+	       leftb, font.ascent + ymin, xmin, ymin, 1);
+	free(vertices);
+}
+
+unsigned char *new_glyph(uint32_t id, const uint32_t *chars, size_t len,
+			int cwidth)
+{
 	struct bitmap bm = {
 		font.width * cwidth,
 		font.height,
@@ -1472,25 +1489,37 @@ unsigned char *new_glyph(uint32_t id, uint32_t c, int cwidth)
 	};
 
 	bm.pixels = calloc(1, bm.w * bm.h);
+	render_character(&bm, chars[0], 0);
+	if (len > 1) {
+		struct bitmap mark = bm;
+		int glyph = find_index(&font, chars[0]);
+		int metric = glyph < font.num_metrics ? glyph : font.num_metrics - 1;
+		float anchor = (unsigned short)read_short(font.data + font.hmtx + 4 * metric) * font.scale;
 
-	get_glyph_origin(&font, glyph, &xmin, &ymin);
-	render(&bm, 0.35f, vertices, vcount, font.scale, font.scale,
-	       leftb, font.ascent + ymin, xmin, ymin, 1);
-
-	free(vertices);
-
+		mark.pixels = calloc(1, bm.w * bm.h);
+		for (size_t i = 1; i < len; ++i) {
+			memset(mark.pixels, 0, bm.w * bm.h);
+			render_character(&mark, chars[i], anchor);
+			for (int p = 0; p < bm.w * bm.h; ++p) {
+				unsigned a = bm.pixels[p], b = mark.pixels[p];
+				bm.pixels[p] = a + b - (a * b + 127) / 255;
+			}
+		}
+		free(mark.pixels);
+	}
 	cache(&font.cache, id, bm.pixels);
 	return bm.pixels;
 }
 
-unsigned char *get_glyph(uint32_t id, uint32_t c, int cwidth)
+unsigned char *get_glyph(uint32_t id, const uint32_t *chars, size_t len,
+			int cwidth)
 {
 	unsigned char *buf = lookup(font.cache, id);
 
 	if (buf)
 		return buf;
 	else
-		return new_glyph(id, c, cwidth);
+		return new_glyph(id, chars, len, cwidth);
 }
 
 static int get_width(struct font *f)
@@ -1563,7 +1592,7 @@ int font_init(char *path)
 		return -1;
 	}
 
-	font.num_metrics = read_ushort(font.data + font.hhea + 34);
+	font.num_metrics = (unsigned short)read_short(font.data + font.hhea + 34);
 	font.cache = &leaf;
 
 	return 0;

@@ -154,7 +154,7 @@ int tsm_symbol_table_new(struct tsm_symbol_table **out)
 		return -ENOMEM;
 	memset(tbl, 0, sizeof(*tbl));
 	tbl->ref = 1;
-	tbl->next_id = TSM_UCS4_MAX + 2;
+	tbl->next_id = TSM_UCS4_MAX + 1;
 	shl_htable_init(&tbl->symbols, cmp_ucs4, hash_ucs4, NULL);
 
 	ret = shl_array_new(&tbl->index, sizeof(uint32_t*), 4);
