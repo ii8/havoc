@@ -32,6 +32,7 @@
 int font_init(char *);
 void font_scale(int, int *, int *);
 void font_deinit(void);
+void font_underline(int *, int *);
 unsigned char *get_glyph(uint32_t, uint32_t, int);
 
 enum deco {
@@ -732,6 +733,19 @@ static void draw_cell(struct tsm_screen *tsm, uint32_t id, const uint32_t *ch,
 			      a->br, a->bg, a->bb,
 			      a->fr, a->fg, a->fb,
 			      term.cfg.opacity, g);
+	}
+	if (a->underline && char_width) {
+		int position, thickness, i, j;
+		int cells = char_width < term.col - x ? char_width : term.col - x;
+		uint32_t color = join(255, a->inverse ? ~a->fr : a->fr,
+		                      a->inverse ? ~a->fg : a->fg,
+		                      a->inverse ? ~a->fb : a->fb);
+		font_underline(&position, &thickness);
+		dst += position * term.width;
+		for (i = 0; i < thickness; ++i) {
+			for (j = 0; j < cells * term.cwidth; ++j) dst[j] = color;
+			dst += term.width;
+		}
 	}
 }
 
