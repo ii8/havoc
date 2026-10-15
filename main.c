@@ -3,7 +3,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include <assert.h>
-#include <ctype.h>
 
 #include <errno.h>
 #include <limits.h>
@@ -188,7 +187,8 @@ static struct {
 	} *binding;
 
 	struct {
-		char shell[32];
+		char cmd[512];
+		int cmd_argc;
 		int col, row;
 		int scrollback;
 		bool scroll_to_bottom_on_input;
@@ -202,7 +202,8 @@ static struct {
 } term = {
 	.scale = 120,
 
-	.cfg.shell = "/bin/sh",
+	.cfg.cmd = "/bin/sh",
+	.cfg.cmd_argc = 1,
 	.cfg.col = 80,
 	.cfg.row = 24,
 	.cfg.scrollback = 0,
@@ -1750,8 +1751,14 @@ static void setup_pty(char *argv[])
 			execvp(*argv, argv);
 			prog = *argv;
 		} else {
-			execlp(term.cfg.shell, term.cfg.shell, (char *) NULL);
-			prog = term.cfg.shell;
+			int i;
+			char *argv[256];
+			argv[0] = &term.cfg.cmd[0];
+			for (i = 1; i < term.cfg.cmd_argc; ++i)
+				argv[i] = argv[i - 1] + strlen(argv[i - 1]) + 1;
+			argv[term.cfg.cmd_argc] = NULL;
+			execvp(argv[0], argv);
+			prog = argv[0];
 		}
 		fprintf(stderr, "could not execute %s: %s\n", prog,
 			strerror(errno));
@@ -1846,6 +1853,26 @@ static struct {
 
 #define CONF_FILE "havoc.cfg"
 
+static bool cblank(const char c)
+{
+	return c == ' ' || c == '\t';
+}
+
+static bool cspace(const char c)
+{
+	switch (c) {
+	case ' ':
+	case '\f':
+	case '\n':
+	case '\r':
+	case '\t':
+	case '\v':
+		return true;
+	default:
+		return false;
+	}
+}
+
 static long long cfg_num(const char *nptr, int base,
 			 long long min, long long max)
 {
@@ -1855,10 +1882,59 @@ static long long cfg_num(const char *nptr, int base,
 	return n < min ? min : n > max ? max : n;
 }
 
+static int cfg_cmd(char *dst, const char *src)
+{
+	int argc = 0;
+
+	while (*src) {
+		bool quoted = false;
+
+		while (cblank(*src))
+			++src;
+
+		if (!*src)
+			break;
+
+		while (*src) {
+			char c = *src;
+
+			if (!quoted && cblank(c))
+				break;
+
+			++src;
+
+			if (c == '\\') {
+				if (!*src)
+					return 0;
+
+				*dst++ = *src++;
+			} else if (c == '"') {
+				quoted = !quoted;
+			} else {
+				*dst++ = c;
+			}
+		}
+
+		if (quoted)
+			return 0;
+
+		*dst++ = '\0';
+		++argc;
+	}
+	return argc;
+}
+
 static void child_config(char *key, char *val)
 {
-	if (strcmp(key, "program") == 0)
-		strncpy(term.cfg.shell, val, sizeof(term.cfg.shell) - 1);
+	if (strcmp(key, "program") == 0) {
+		term.cfg.cmd_argc = cfg_cmd(term.cfg.cmd, val);
+
+		if (term.cfg.cmd_argc == 0) {
+			fprintf(stderr, "invalid command in [child] program; using /bin/sh\n");
+			strcpy(term.cfg.cmd, "/bin/sh");
+			term.cfg.cmd_argc = 1;
+		}
+	}
 }
 
 static void window_config(char *key, char *val)
@@ -2018,7 +2094,7 @@ static void read_config(void)
 
 	while (fgets(line, sizeof(line), f)) {
 		key = line;
-		while (isblank(*key))
+		while (cblank(*key))
 			++key;
 
 		switch (*key) {
@@ -2054,18 +2130,18 @@ static void read_config(void)
 				continue;
 
 			p = val - 1;
-			while (isblank(*p) && p > key) {
+			while (cblank(*p) && p > key) {
 				*p = '\0';
 				--p;
 			}
 
 			val[0] = '\0';
 			++val;
-			while (isblank(*val))
+			while (cblank(*val))
 				++val;
 
 			p = val + strlen(val) - 1;
-			while (isspace(*p) && p > val) {
+			while (cspace(*p) && p > val) {
 				*p = '\0';
 				--p;
 			}
