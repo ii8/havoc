@@ -188,7 +188,8 @@ static struct {
 	} *binding;
 
 	struct {
-		char shell[32];
+		char shell[512];
+		char *shell_argv[64];
 		int col, row;
 		int scrollback;
 		bool scroll_to_bottom_on_input;
@@ -203,6 +204,7 @@ static struct {
 	.scale = 120,
 
 	.cfg.shell = "/bin/sh",
+	.cfg.shell_argv = { term.cfg.shell },
 	.cfg.col = 80,
 	.cfg.row = 24,
 	.cfg.scrollback = 0,
@@ -1750,8 +1752,8 @@ static void setup_pty(char *argv[])
 			execvp(*argv, argv);
 			prog = *argv;
 		} else {
-			execlp(term.cfg.shell, term.cfg.shell, (char *) NULL);
-			prog = term.cfg.shell;
+			execvp(term.cfg.shell_argv[0], term.cfg.shell_argv);
+			prog = term.cfg.shell_argv[0];
 		}
 		fprintf(stderr, "could not execute %s: %s\n", prog,
 			strerror(errno));
@@ -1855,10 +1857,78 @@ static long long cfg_num(const char *nptr, int base,
 	return n < min ? min : n > max ? max : n;
 }
 
+static bool parse_command(char *command, char **argv, size_t capacity)
+{
+	char *src = command;
+	char *dst = command;
+	size_t argc = 0;
+
+	if (capacity == 0)
+		return false;
+
+	while (*src) {
+		bool quoted = false;
+
+		while (isspace((unsigned char)*src))
+			++src;
+
+		if (!*src)
+			break;
+
+		if (argc + 1 >= capacity)
+			return false;
+
+		argv[argc++] = dst;
+
+		while (*src) {
+			char c = *src;
+
+			if (!quoted && isspace((unsigned char)c))
+				break;
+
+			++src;
+
+			if (c == '\\') {
+				if (!*src)
+					return false;
+
+				*dst++ = *src++;
+			} else if (c == '"') {
+				quoted = !quoted;
+			} else {
+				*dst++ = c;
+			}
+		}
+
+		if (quoted)
+			return false;
+
+		while (isspace((unsigned char)*src))
+			++src;
+
+		*dst++ = '\0';
+	}
+
+	argv[argc] = NULL;
+	return argc > 0 && argv[0][0] != '\0';
+}
+
 static void child_config(char *key, char *val)
 {
-	if (strcmp(key, "program") == 0)
-		strncpy(term.cfg.shell, val, sizeof(term.cfg.shell) - 1);
+	if (strcmp(key, "program") != 0)
+		return;
+
+	if (strlen(val) < sizeof(term.cfg.shell)) {
+		strcpy(term.cfg.shell, val);
+		if (parse_command(term.cfg.shell, term.cfg.shell_argv,
+				  ARRAY_LENGTH(term.cfg.shell_argv)))
+			return;
+	}
+
+	fprintf(stderr, "invalid command in [child] program; using /bin/sh\n");
+	strcpy(term.cfg.shell, "/bin/sh");
+	term.cfg.shell_argv[0] = term.cfg.shell;
+	term.cfg.shell_argv[1] = NULL;
 }
 
 static void window_config(char *key, char *val)
