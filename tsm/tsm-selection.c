@@ -245,21 +245,25 @@ void tsm_screen_selection_retarget(struct tsm_screen *con)
 					    con->sel_target_y);
 }
 
-/* TODO: tsm_ucs4_to_utf8 expects UCS4 characters, but a cell contains a
- * tsm-symbol (which can contain multiple UCS4 chars). Fix this when introducing
- * support for combining characters. */
-static int copy_line(struct line *line, char *buf, int start, size_t len)
+static int copy_line(struct tsm_screen *con, struct line *line,
+		     char *buf, int start, size_t len)
 {
-	int i, end;
-	char *pos = buf;
+	int end = start + len;
+	int bytes = 0;
+	char scratch[4];
 
-	end = start + len;
-	for (i = start; i < line->size && i < end; ++i) {
-		if (line->cells[i].ch)
-			pos += tsm_ucs4_to_utf8(line->cells[i].ch, pos);
+	for (int i = start; i < line->size && i < end; ++i) {
+		struct cell *cell = &line->cells[i];
+		size_t count;
+		const uint32_t *chars;
+
+		if (!cell->ch || !cell->width)
+			continue;
+		chars = tsm_symbol_get(con->sym_table, &cell->ch, &count);
+		for (size_t j = 0; j < count; ++j)
+			bytes += tsm_ucs4_to_utf8(chars[j], buf ? buf + bytes : scratch);
 	}
-
-	return pos - buf;
+	return bytes;
 }
 
 /* TODO: This beast definitely needs some "beautification", however, it's meant
@@ -301,22 +305,22 @@ int tsm_screen_selection_copy(struct tsm_screen *con, char **out)
 		if (iter == start->line && iter == end->line) {
 			if (iter->size > start->x) {
 				if (iter->size > end->x)
-					len += end->x - start->x + 1;
+					len += copy_line(con, iter, NULL, start->x, end->x - start->x + 1);
 				else
-					len += iter->size - start->x;
+					len += copy_line(con, iter, NULL, start->x, iter->size - start->x);
 			}
 			break;
 		} else if (iter == start->line) {
 			if (iter->size > start->x)
-				len += iter->size - start->x;
+				len += copy_line(con, iter, NULL, start->x, iter->size - start->x);
 		} else if (iter == end->line) {
 			if (iter->size > end->x)
-				len += end->x + 1;
+				len += copy_line(con, iter, NULL, 0, end->x + 1);
 			else
-				len += iter->size;
+				len += copy_line(con, iter, NULL, 0, iter->size);
 			break;
 		} else {
-			len += iter->size;
+			len += copy_line(con, iter, NULL, 0, iter->size);
 		}
 
 		++len;
@@ -329,25 +333,26 @@ int tsm_screen_selection_copy(struct tsm_screen *con, char **out)
 		else
 			i = start->y;
 		for ( ; i < con->size_y; ++i) {
+			iter = con->lines[i];
 			if (!start->line && start->y == i && end->y == i) {
 				if (con->size_x > start->x) {
 					if (con->size_x > end->x)
-						len += end->x - start->x + 1;
+						len += copy_line(con, iter, NULL, start->x, end->x - start->x + 1);
 					else
-						len += con->size_x - start->x;
+						len += copy_line(con, iter, NULL, start->x, con->size_x - start->x);
 				}
 				break;
 			} else if (!start->line && start->y == i) {
 				if (con->size_x > start->x)
-					len += con->size_x - start->x;
+					len += copy_line(con, iter, NULL, start->x, con->size_x - start->x);
 			} else if (end->y == i) {
 				if (con->size_x > end->x)
-					len += end->x + 1;
+					len += copy_line(con, iter, NULL, 0, end->x + 1);
 				else
-					len += con->size_x;
+					len += copy_line(con, iter, NULL, 0, con->size_x);
 				break;
 			} else {
-				len += con->size_x;
+				len += copy_line(con, iter, NULL, 0, con->size_x);
 			}
 
 			++len;
@@ -355,7 +360,6 @@ int tsm_screen_selection_copy(struct tsm_screen *con, char **out)
 	}
 
 	/* allocate buffer */
-	len *= 4;
 	++len;
 	str = malloc(len);
 	if (!str)
@@ -374,22 +378,22 @@ int tsm_screen_selection_copy(struct tsm_screen *con, char **out)
 					len = end->x - start->x + 1;
 				else
 					len = iter->size - start->x;
-				pos += copy_line(iter, pos, start->x, len);
+				pos += copy_line(con, iter, pos, start->x, len);
 			}
 			break;
 		} else if (iter == start->line) {
 			if (iter->size > start->x)
-				pos += copy_line(iter, pos, start->x,
+				pos += copy_line(con, iter, pos, start->x,
 						 iter->size - start->x);
 		} else if (iter == end->line) {
 			if (iter->size > end->x)
 				len = end->x + 1;
 			else
 				len = iter->size;
-			pos += copy_line(iter, pos, 0, len);
+			pos += copy_line(con, iter, pos, 0, len);
 			break;
 		} else {
-			pos += copy_line(iter, pos, 0, iter->size);
+			pos += copy_line(con, iter, pos, 0, iter->size);
 		}
 
 		*pos++ = '\n';
@@ -409,22 +413,22 @@ int tsm_screen_selection_copy(struct tsm_screen *con, char **out)
 						len = end->x - start->x + 1;
 					else
 						len = con->size_x - start->x;
-					pos += copy_line(iter, pos, start->x, len);
+					pos += copy_line(con, iter, pos, start->x, len);
 				}
 				break;
 			} else if (!start->line && start->y == i) {
 				if (con->size_x > start->x)
-					pos += copy_line(iter, pos, start->x,
+					pos += copy_line(con, iter, pos, start->x,
 							 con->size_x - start->x);
 			} else if (end->y == i) {
 				if (con->size_x > end->x)
 					len = end->x + 1;
 				else
 					len = con->size_x;
-				pos += copy_line(iter, pos, 0, len);
+				pos += copy_line(con, iter, pos, 0, len);
 				break;
 			} else {
-				pos += copy_line(iter, pos, 0, con->size_x);
+				pos += copy_line(con, iter, pos, 0, con->size_x);
 			}
 
 			*pos++ = '\n';
