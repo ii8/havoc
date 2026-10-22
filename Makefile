@@ -59,7 +59,7 @@ OBJ = \
 havoc: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
 
-$(OBJ): $(GEN)
+$(OBJ): $(GEN) tsm/libtsm.h tsm/libtsm-int.h
 
 .c.o:
 	$(CC) $(PKG_CFLAGS) $(CFLAGS) $(CDEFS) -c $< -o $@

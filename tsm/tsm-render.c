@@ -90,6 +90,49 @@ static void to_rgb(struct tsm_screen *con, struct tsm_screen_attr *attr)
 	}
 }
 
+bool screen_snapshot(struct tsm_screen *con)
+{
+	struct screen_snapshot *snapshot;
+	struct cell *cells;
+	size_t row_size;
+	int x, y;
+	int cur_x = con->cursor_x < con->size_x ? con->cursor_x : con->size_x - 1;
+	int cur_y = con->cursor_y < con->size_y ? con->cursor_y : con->size_y - 1;
+
+	if (con->snapshot)
+		return true;
+	if (con->size_x <= 0 || con->size_y <= 0 ||
+	    (size_t)con->size_x > (SIZE_MAX - sizeof(struct line)) / sizeof(struct cell))
+		return false;
+	row_size = sizeof(struct line) + con->size_x * sizeof(struct cell);
+	if ((size_t)con->size_y > (SIZE_MAX - sizeof(*snapshot)) / row_size)
+		return false;
+	snapshot = malloc(sizeof(*snapshot) + con->size_y * row_size);
+	if (!snapshot)
+		return false;
+	snapshot->age = con->age_cnt;
+	memcpy(snapshot->background, con->background, sizeof(snapshot->background));
+	cells = (struct cell *)(snapshot->lines + con->size_y);
+	for (y = 0; y < con->size_y; ++y) {
+		snapshot->lines[y] = (struct line) {
+			.size = con->size_x, .cells = cells, .age = con->lines[y]->age
+		};
+		memcpy(cells, con->lines[y]->cells, con->size_x * sizeof(*cells));
+		/* Freeze colors and cursor; selection is applied when drawing. */
+		for (x = 0; x < con->size_x; ++x) {
+			to_rgb(con, &cells[x].attr);
+			cells[x].attr.fccode = cells[x].attr.bccode = TSM_COLOR_RGB;
+			if ((x == cur_x && y == cur_y &&
+			     !(con->flags & TSM_SCREEN_HIDE_CURSOR)) !=
+			    !!(con->flags & TSM_SCREEN_INVERSE))
+				cells[x].attr.inverse = !cells[x].attr.inverse;
+		}
+		cells += con->size_x;
+	}
+	con->snapshot = snapshot;
+	return true;
+}
+
 SHL_EXPORT
 tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 			  void *data)
@@ -103,6 +146,7 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 	size_t len;
 	bool in_sel = false, sel_start = false, sel_end = false;
 	bool was_sel = false;
+	bool frozen;
 	tsm_age_t age;
 
 	screen_cell_init(con, &empty, &con->def_attr);
@@ -134,11 +178,12 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 	}
 
 	for (i = 0; i < con->size_y; ++i) {
+		frozen = !iter && con->snapshot;
 		if (iter) {
 			line = iter;
 			iter = iter->next;
 		} else {
-			line = con->lines[k];
+			line = screen_view_line(con, k);
 			k++;
 		}
 
@@ -180,7 +225,7 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 				}
 			}
 
-			if (k == cur_y + 1 && j == cur_x &&
+			if (!frozen && k == cur_y + 1 && j == cur_x &&
 			    !(con->flags & TSM_SCREEN_HIDE_CURSOR))
 				attr.inverse = !attr.inverse;
 
@@ -188,7 +233,7 @@ tsm_age_t tsm_screen_draw(struct tsm_screen *con, tsm_screen_draw_cb draw_cb,
 			 * INVERSE mode is set, we should instead just select
 			 * inverse colors instead of switching background and
 			 * foreground */
-			if (con->flags & TSM_SCREEN_INVERSE)
+			if (!frozen && (con->flags & TSM_SCREEN_INVERSE))
 				attr.inverse = !attr.inverse;
 
 			if (in_sel || was_sel) {

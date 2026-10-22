@@ -115,10 +115,7 @@ static struct line *selection_set(struct tsm_screen *con,
 		return sel->line;
 	}
 
-	if (y < con->line_num)
-		return con->lines[y];
-
-	return NULL;
+	return screen_view_line(con, y);
 }
 
 static bool wordend(tsm_symbol_t ch)
@@ -143,7 +140,7 @@ static void selection_adjust(struct tsm_screen *con, struct line *line)
 
 	anchor_line = con->sel_start.line;
 	if (anchor_line == NULL)
-		anchor_line = con->lines[con->sel_start.y];
+		anchor_line = screen_view_line(con, con->sel_start.y);
 
 	target_line = line;
 
@@ -402,7 +399,7 @@ int tsm_screen_selection_copy(struct tsm_screen *con, char **out)
 		else
 			i = start->y;
 		for ( ; i < con->size_y; ++i) {
-			iter = con->lines[i];
+			iter = screen_view_line(con, i);
 			if (!start->line && start->y == i && end->y == i) {
 				if (con->size_x > start->x) {
 					if (con->size_x > end->x)

@@ -254,6 +254,10 @@ typedef void (*tsm_vte_write_cb) (struct tsm_vte *vte,
 				  size_t len,
 				  void *data);
 
+/* Milliseconds until synchronization expires, or -1 when inactive. */
+int tsm_vte_sync_timeout(struct tsm_vte *vte);
+bool tsm_vte_flush_sync(struct tsm_vte *vte);
+
 int tsm_vte_new(struct tsm_vte **out, struct tsm_screen *con,
 		tsm_vte_write_cb write_cb, void *data);
 void tsm_vte_ref(struct tsm_vte *vte);
@@ -296,7 +300,8 @@ void tsm_vte_get_def_attr(struct tsm_vte *vte, struct tsm_screen_attr *out);
 
 void tsm_vte_reset(struct tsm_vte *vte);
 void tsm_vte_hard_reset(struct tsm_vte *vte);
-void tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len);
+/* Return whether a redraw is needed; len == 0 also checks timeouts. */
+bool tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len);
 bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
 			     uint32_t ascii, unsigned int mods,
 			     uint32_t unicode);
