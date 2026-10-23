@@ -245,19 +245,19 @@ static void handle_tty(int ev)
 	if (ev & POLLIN) {
 		char data[256];
 
-		term.need_redraw = true;
 		len = read(term.master_fd, data, sizeof(data));
 
 		if (len < 0) {
 			error("could not read from pty");
 		} else {
-			tsm_vte_input(term.vte, data, len);
+			term.need_redraw |= tsm_vte_input(term.vte, data, len);
 		}
 	}
 
 	if (ev & POLLHUP && len == 0) {
 		close(term.master_fd);
 		term.master_fd = -1;
+		term.need_redraw |= tsm_vte_flush_sync(term.vte);
 		if (!term.opt.linger)
 			term.die = true;
 	}
@@ -269,6 +269,14 @@ static long long now(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &t);
 	return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static int redraw_timeout(void)
+{
+	int timeout = tsm_vte_sync_timeout(term.vte);
+
+	return timeout < 0 || (term.repeat.timeout >= 0 && term.repeat.timeout < timeout)
+		? term.repeat.timeout : timeout;
 }
 
 static void handle_repeat(void)
@@ -1584,6 +1592,7 @@ static void do_configure(void)
 
 		term.col = col;
 		term.row = row;
+		tsm_vte_flush_sync(term.vte);
 		tsm_screen_resize(term.screen, col, row);
 
 		if (term.master_fd >= 0) {
@@ -1775,6 +1784,7 @@ static void setup_pty(char *argv[])
 static void action_reset(void)
 {
 	tsm_vte_reset(term.vte);
+	term.need_redraw = true;
 }
 
 static void action_hard_reset(void)
@@ -2312,13 +2322,16 @@ retry:
 	};
 
 	while (!term.die) {
+		term.need_redraw |= tsm_vte_input(term.vte, NULL, 0);
 		if (term.can_redraw && term.need_redraw && term.configured)
 			redraw();
 
 		wl_display_flush(term.display);
 
+		pollfds[EV_TTY].fd = term.master_fd;
 		pollfds[EV_PASTE].fd = term.paste.fd[0];
-		n = poll(pollfds, NUM_POLLFDS, term.repeat.timeout);
+		/* Drawing may have consumed the remaining synchronization time. */
+		n = poll(pollfds, NUM_POLLFDS, redraw_timeout());
 		if (n < 0) {
 			error("poll error");
 			abort();

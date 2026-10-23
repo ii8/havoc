@@ -95,6 +95,13 @@ struct line {
 	tsm_age_t age;			/* age of the whole line */
 };
 
+/* Only the active grid is frozen; scrollback remains live. */
+struct screen_snapshot {
+	tsm_age_t age;
+	uint8_t background[3];
+	struct line lines[];
+};
+
 #define SELECTION_TOP -1
 struct selection_pos {
 	struct line *line;
@@ -126,6 +133,7 @@ struct tsm_screen {
 	struct line **lines;		/* active lines; copy of main/alt */
 	struct line **main_lines;	/* real main lines */
 	struct line **alt_lines;	/* real alternative lines */
+	struct screen_snapshot *snapshot;
 	tsm_age_t age;			/* whole screen age */
 	int vanguard;			/* lowest non-empty line on screen */
 
@@ -168,6 +176,20 @@ void tsm_screen_reset_opts(struct tsm_screen *scr, unsigned int opts);
 unsigned int tsm_screen_get_opts(struct tsm_screen *scr);
 
 void tsm_screen_selection_retarget(struct tsm_screen *scr);
+bool screen_snapshot(struct tsm_screen *con);
+bool screen_release_snapshot(struct tsm_screen *con);
+
+static inline struct line *screen_view_line(struct tsm_screen *con, int y)
+{
+	if (y < 0 || y >= con->size_y)
+		return NULL;
+	return con->snapshot ? &con->snapshot->lines[y] : con->lines[y];
+}
+
+static inline tsm_age_t screen_view_age(struct tsm_screen *con)
+{
+	return con->snapshot && !con->sb_pos ? con->snapshot->age : con->age_cnt;
+}
 
 static inline void screen_inc_age(struct tsm_screen *con)
 {

@@ -51,6 +51,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 #include "libtsm.h"
 #include "libtsm-int.h"
 #include "shl-llog.h"
@@ -137,6 +138,7 @@ enum parser_action {
 #define FLAG_PREPEND_ESCAPE			0x00010000 /* Prepend escape character to next output */
 #define FLAG_TITE_INHIBIT_MODE			0x00020000 /* Prevent switching to alternate screen buffer */
 #define FLAG_BRACKETED_PASTE_MODE		0x00040000
+#define FLAG_SYNCHRONIZED_UPDATE		0x00080000
 
 #define ENDPASTE "\e[201~"
 
@@ -155,6 +157,8 @@ struct tsm_vte {
 	struct tsm_screen *con;
 	tsm_vte_write_cb write_cb;
 	void *data;
+	long long sync_deadline;
+	bool redraw_pending;
 
 	struct tsm_utf8_mach *mach;
 	unsigned long parse_cnt;
@@ -322,6 +326,7 @@ void tsm_vte_unref(struct tsm_vte *vte)
 	if (!vte->ref || --vte->ref)
 		return;
 
+	tsm_vte_flush_sync(vte);
 	tsm_screen_unref(vte->con);
 	tsm_utf8_mach_free(vte->mach);
 	free(vte);
@@ -430,8 +435,8 @@ static void vte_write_debug(struct tsm_vte *vte, const char *u8, size_t len,
 	/* in local echo mode, directly parse the data again */
 	if (!vte->parse_cnt && !(vte->flags & FLAG_SEND_RECEIVE_MODE)) {
 		if (vte->flags & FLAG_PREPEND_ESCAPE && u8[0] != '\e')
-			tsm_vte_input(vte, "\e", 1);
-		tsm_vte_input(vte, u8, len);
+			vte->redraw_pending |= tsm_vte_input(vte, "\e", 1);
+		vte->redraw_pending |= tsm_vte_input(vte, u8, len);
 	}
 
 	if (vte->flags & FLAG_PREPEND_ESCAPE && u8[0] != '\e')
@@ -529,6 +534,41 @@ static void restore_state(struct tsm_vte *vte)
 	}
 }
 
+static long long now(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static void sync_begin(struct tsm_vte *vte)
+{
+	if (screen_snapshot(vte->con))
+		vte->sync_deadline = now() + 150;
+	else
+		vte->flags &= ~FLAG_SYNCHRONIZED_UPDATE;
+}
+
+SHL_EXPORT
+int tsm_vte_sync_timeout(struct tsm_vte *vte)
+{
+	long long remaining;
+
+	if (!vte->sync_deadline)
+		return -1;
+	remaining = vte->con->snapshot ? vte->sync_deadline - now() : 0;
+	return remaining > 0 ? remaining : 0;
+}
+
+SHL_EXPORT
+bool tsm_vte_flush_sync(struct tsm_vte *vte)
+{
+	vte->sync_deadline = 0;
+	vte->flags &= ~FLAG_SYNCHRONIZED_UPDATE;
+	return screen_release_snapshot(vte->con);
+}
+
 /*
  * Reset VTE state
  * This performs a soft reset of the VTE. That is, everything is reset to the
@@ -538,6 +578,7 @@ static void restore_state(struct tsm_vte *vte)
 SHL_EXPORT
 void tsm_vte_reset(struct tsm_vte *vte)
 {
+	tsm_vte_flush_sync(vte);
 	vte->flags = 0;
 	vte->flags |= FLAG_TEXT_CURSOR_MODE;
 	vte->flags |= FLAG_AUTO_REPEAT_MODE;
@@ -1414,6 +1455,15 @@ static void csi_mode(struct tsm_vte *vte, bool set)
 						   vte->alt_cursor_y);
 			}
 			continue;
+		case 2026:
+			if (vte->csi_flags != CSI_WHAT)
+				continue;
+			set_reset_flag(vte, set, FLAG_SYNCHRONIZED_UPDATE);
+			if (set)
+				sync_begin(vte);
+			else
+				tsm_vte_flush_sync(vte);
+			continue;
 		case 2004:
 			set_reset_flag(vte, set, FLAG_BRACKETED_PASTE_MODE);
 			continue;
@@ -1611,9 +1661,13 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
 			/* DECSTR: Soft Reset */
 			csi_soft_reset(vte);
 		} else if (vte->csi_flags & CSI_CASH) {
-			/* DECRQM: Request DEC Private Mode */
-			/* If CSI_WHAT is set, then enable,
-			 * otherwise disable */
+			/* DECRQM: query one DEC private mode. */
+			if (vte->csi_flags == (CSI_WHAT | CSI_CASH) &&
+			    vte->csi_argc == 1 && vte->csi_argv[0] == 2026) {
+				const char *reply = vte->flags & FLAG_SYNCHRONIZED_UPDATE
+					? "\033[?2026;1$y" : "\033[?2026;2$y";
+				vte_write(vte, reply, strlen(reply));
+			}
 		} else {
 			/* DECSCL: Compatibility Level */
 			/* Sometimes CSI_DQUOTE is set here, too */
@@ -2338,12 +2392,18 @@ static void parse_data(struct tsm_vte *vte, uint32_t raw)
 }
 
 SHL_EXPORT
-void tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len)
+bool tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len)
 {
+	tsm_age_t age = screen_view_age(vte->con);
+	struct line *sb_pos = vte->con->sb_pos;
+	bool changed = vte->redraw_pending;
 	int state;
 	uint32_t ucs4;
 	size_t i;
 
+	vte->redraw_pending = false;
+	if (tsm_vte_sync_timeout(vte) == 0)
+		tsm_vte_flush_sync(vte);
 	++vte->parse_cnt;
 	for (i = 0; i < len; ++i) {
 		if (vte->flags & FLAG_7BIT_MODE) {
@@ -2363,6 +2423,8 @@ void tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len)
 		}
 	}
 	--vte->parse_cnt;
+	return changed || vte->con->age_reset || screen_view_age(vte->con) != age ||
+	       vte->con->sb_pos != sb_pos;
 }
 
 SHL_EXPORT
