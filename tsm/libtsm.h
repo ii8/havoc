@@ -106,6 +106,11 @@ typedef uint32_t tsm_symbol_t;
 struct tsm_screen;
 typedef uint_fast32_t tsm_age_t;
 
+struct tsm_screen_view {
+	tsm_age_t age;
+	uint64_t sb_id;
+};
+
 #define TSM_SCREEN_INSERT_MODE	0x01
 #define TSM_SCREEN_AUTO_WRAP	0x02
 #define TSM_SCREEN_REL_ORIGIN	0x04
@@ -146,6 +151,9 @@ void tsm_screen_unref(struct tsm_screen *con);
 
 int tsm_screen_get_width(struct tsm_screen *con);
 int tsm_screen_get_height(struct tsm_screen *con);
+struct tsm_screen_view tsm_screen_get_view(const struct tsm_screen *con);
+bool tsm_screen_view_changed(const struct tsm_screen *con,
+			     struct tsm_screen_view before);
 int tsm_screen_resize(struct tsm_screen *con, int x, int y);
 int tsm_screen_set_margins(struct tsm_screen *con, int top, int bottom);
 void tsm_screen_set_max_sb(struct tsm_screen *con, int max);
@@ -301,7 +309,7 @@ void tsm_vte_reset(struct tsm_vte *vte);
 void tsm_vte_hard_reset(struct tsm_vte *vte);
 /* Return whether the input changed the displayed screen. */
 bool tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len);
-/* A handled key may change the screen through local echo. */
+/* Return whether the key was handled. Local echo may also change the view. */
 bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
 			     uint32_t ascii, unsigned int mods,
 			     uint32_t unicode);

@@ -580,6 +580,27 @@ int tsm_screen_get_height(struct tsm_screen *con)
 	return con->size_y;
 }
 
+SHL_EXPORT
+struct tsm_screen_view tsm_screen_get_view(const struct tsm_screen *con)
+{
+	return (struct tsm_screen_view) {
+		.age = con->snapshot.active && !con->sb_pos ?
+			con->snapshot.age : con->age_cnt,
+		/* Input can evict the row at the top of the view. */
+		.sb_id = con->sb_pos ? con->sb_pos->sb_id : 0,
+	};
+}
+
+SHL_EXPORT
+bool tsm_screen_view_changed(const struct tsm_screen *con,
+			     struct tsm_screen_view before)
+{
+	struct tsm_screen_view after = tsm_screen_get_view(con);
+
+	return con->age_reset || before.age != after.age ||
+	       before.sb_id != after.sb_id;
+}
+
 bool screen_release_snapshot(struct tsm_screen *con)
 {
 	if (!con->snapshot.active)

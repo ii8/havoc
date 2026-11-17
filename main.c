@@ -271,6 +271,16 @@ static long long now(void)
 	return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
 
+static bool send_key(xkb_keysym_t sym, uint32_t unicode)
+{
+	struct tsm_screen_view before = tsm_screen_get_view(term.screen);
+	bool handled = tsm_vte_handle_keyboard(term.vte, sym, XKB_KEY_NoSymbol,
+					       term.mods, unicode);
+
+	term.need_redraw |= tsm_screen_view_changed(term.screen, before);
+	return handled;
+}
+
 static void handle_repeat(void)
 {
 	int diff;
@@ -291,10 +301,7 @@ static void handle_repeat(void)
 			return;
 		}
 
-		if (tsm_vte_handle_keyboard(term.vte, term.repeat.sym,
-					    XKB_KEY_NoSymbol, term.mods,
-					    term.repeat.unicode))
-			term.need_redraw = true;
+		send_key(term.repeat.sym, term.repeat.unicode);
 	} else {
 		term.repeat.timeout -= diff;
 	}
@@ -1068,14 +1075,8 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		b = b->next;
 	}
 
-	if (!action) {
-		if (tsm_vte_handle_keyboard(term.vte, sym, XKB_KEY_NoSymbol,
-					    term.mods, unicode)) {
-			if (term.cfg.scroll_to_bottom_on_input)
-				tsm_screen_sb_reset(term.screen);
-			term.need_redraw = true;
-		}
-	}
+	if (!action && send_key(sym, unicode) && term.cfg.scroll_to_bottom_on_input)
+		term.need_redraw |= tsm_screen_sb_reset(term.screen);
 
 	if (xkb_keymap_key_repeats(term.xkb_keymap, key + 8)) {
 		term.repeat.key = key;

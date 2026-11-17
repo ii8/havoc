@@ -2389,12 +2389,10 @@ static void vte_input(struct tsm_vte *vte, const char *u8, size_t len)
 SHL_EXPORT
 bool tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len)
 {
-	tsm_age_t age = screen_view_age(vte->con);
-	struct line *sb_pos = vte->con->sb_pos;
+	struct tsm_screen_view before = tsm_screen_get_view(vte->con);
 
 	vte_input(vte, u8, len);
-	return vte->con->age_reset || screen_view_age(vte->con) != age ||
-	       vte->con->sb_pos != sb_pos;
+	return tsm_screen_view_changed(vte->con, before);
 }
 
 SHL_EXPORT

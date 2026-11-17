@@ -184,11 +184,6 @@ bool screen_snapshot(struct tsm_screen *con);
 bool screen_release_snapshot(struct tsm_screen *con);
 void screen_free_snapshot(struct tsm_screen *con);
 
-static inline tsm_age_t screen_view_age(struct tsm_screen *con)
-{
-	return con->snapshot.active && !con->sb_pos ? con->snapshot.age : con->age_cnt;
-}
-
 static inline void screen_inc_age(struct tsm_screen *con)
 {
 	if (!++con->age_cnt) {
