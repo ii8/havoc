@@ -189,6 +189,8 @@ struct tsm_vte {
 	int endpaste_i;
 };
 
+static void vte_input(struct tsm_vte *vte, const char *u8, size_t len);
+
 #define cube6(r, g) \
 	{ r, g, 0}, \
 	{ r, g, 95}, \
@@ -322,6 +324,7 @@ void tsm_vte_unref(struct tsm_vte *vte)
 	if (!vte->ref || --vte->ref)
 		return;
 
+	tsm_vte_flush_sync(vte);
 	tsm_screen_unref(vte->con);
 	tsm_utf8_mach_free(vte->mach);
 	free(vte);
@@ -399,9 +402,9 @@ static void write_safe(struct tsm_vte *vte, const char *u8, size_t len)
  *
  * If SEND_RECEIVE_MODE is off (that is, local echo is on) we have to send all
  * data directly to ourself again. However, we must avoid recursion when
- * tsm_vte_input() itself calls vte_write*(), therefore, we increase the
- * PARSER counter when entering tsm_vte_input() and reset it when leaving it
- * so we never echo data that origins from tsm_vte_input().
+ * vte_input() itself calls vte_write*(), therefore, we increase the
+ * PARSER counter when entering vte_input() and reset it when leaving it
+ * so we never echo data that origins from vte_input().
  * But note that SEND_RECEIVE_MODE is inherently broken for escape sequences
  * that request answers. That is, if we send a request to the client that awaits
  * a response and parse that request via local echo ourself, then we will also
@@ -430,8 +433,8 @@ static void vte_write_debug(struct tsm_vte *vte, const char *u8, size_t len,
 	/* in local echo mode, directly parse the data again */
 	if (!vte->parse_cnt && !(vte->flags & FLAG_SEND_RECEIVE_MODE)) {
 		if (vte->flags & FLAG_PREPEND_ESCAPE && u8[0] != '\e')
-			tsm_vte_input(vte, "\e", 1);
-		tsm_vte_input(vte, u8, len);
+			vte_input(vte, "\e", 1);
+		vte_input(vte, u8, len);
 	}
 
 	if (vte->flags & FLAG_PREPEND_ESCAPE && u8[0] != '\e')
@@ -529,6 +532,12 @@ static void restore_state(struct tsm_vte *vte)
 	}
 }
 
+SHL_EXPORT
+bool tsm_vte_flush_sync(struct tsm_vte *vte)
+{
+	return screen_release_snapshot(vte->con);
+}
+
 /*
  * Reset VTE state
  * This performs a soft reset of the VTE. That is, everything is reset to the
@@ -538,6 +547,7 @@ static void restore_state(struct tsm_vte *vte)
 SHL_EXPORT
 void tsm_vte_reset(struct tsm_vte *vte)
 {
+	tsm_vte_flush_sync(vte);
 	vte->flags = 0;
 	vte->flags |= FLAG_TEXT_CURSOR_MODE;
 	vte->flags |= FLAG_AUTO_REPEAT_MODE;
@@ -1414,6 +1424,14 @@ static void csi_mode(struct tsm_vte *vte, bool set)
 						   vte->alt_cursor_y);
 			}
 			continue;
+		case 2026:
+			if (vte->csi_flags != CSI_WHAT)
+				continue;
+			if (set)
+				screen_snapshot(vte->con);
+			else
+				tsm_vte_flush_sync(vte);
+			continue;
 		case 2004:
 			set_reset_flag(vte, set, FLAG_BRACKETED_PASTE_MODE);
 			continue;
@@ -1611,9 +1629,13 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
 			/* DECSTR: Soft Reset */
 			csi_soft_reset(vte);
 		} else if (vte->csi_flags & CSI_CASH) {
-			/* DECRQM: Request DEC Private Mode */
-			/* If CSI_WHAT is set, then enable,
-			 * otherwise disable */
+			/* DECRQM: query one DEC private mode. */
+			if (vte->csi_flags == (CSI_WHAT | CSI_CASH) &&
+			    vte->csi_argc == 1 && vte->csi_argv[0] == 2026) {
+				const char *reply = vte->con->snapshot.active
+					? "\033[?2026;1$y" : "\033[?2026;2$y";
+				vte_write(vte, reply, strlen(reply));
+			}
 		} else {
 			/* DECSCL: Compatibility Level */
 			/* Sometimes CSI_DQUOTE is set here, too */
@@ -2337,8 +2359,7 @@ static void parse_data(struct tsm_vte *vte, uint32_t raw)
 	llog_warning(vte, "unhandled input %u in state %d", raw, vte->state);
 }
 
-SHL_EXPORT
-void tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len)
+static void vte_input(struct tsm_vte *vte, const char *u8, size_t len)
 {
 	int state;
 	uint32_t ucs4;
@@ -2363,6 +2384,15 @@ void tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len)
 		}
 	}
 	--vte->parse_cnt;
+}
+
+SHL_EXPORT
+bool tsm_vte_input(struct tsm_vte *vte, const char *u8, size_t len)
+{
+	struct tsm_screen_view before = tsm_screen_get_view(vte->con);
+
+	vte_input(vte, u8, len);
+	return tsm_screen_view_changed(vte->con, before);
 }
 
 SHL_EXPORT

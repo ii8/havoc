@@ -245,19 +245,19 @@ static void handle_tty(int ev)
 	if (ev & POLLIN) {
 		char data[256];
 
-		term.need_redraw = true;
 		len = read(term.master_fd, data, sizeof(data));
 
 		if (len < 0) {
 			error("could not read from pty");
 		} else {
-			tsm_vte_input(term.vte, data, len);
+			term.need_redraw |= tsm_vte_input(term.vte, data, len);
 		}
 	}
 
 	if (ev & POLLHUP && len == 0) {
 		close(term.master_fd);
 		term.master_fd = -1;
+		term.need_redraw |= tsm_vte_flush_sync(term.vte);
 		if (!term.opt.linger)
 			term.die = true;
 	}
@@ -269,6 +269,16 @@ static long long now(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &t);
 	return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static bool send_key(xkb_keysym_t sym, uint32_t unicode)
+{
+	struct tsm_screen_view before = tsm_screen_get_view(term.screen);
+	bool handled = tsm_vte_handle_keyboard(term.vte, sym, XKB_KEY_NoSymbol,
+					       term.mods, unicode);
+
+	term.need_redraw |= tsm_screen_view_changed(term.screen, before);
+	return handled;
 }
 
 static void handle_repeat(void)
@@ -291,9 +301,7 @@ static void handle_repeat(void)
 			return;
 		}
 
-		tsm_vte_handle_keyboard(term.vte, term.repeat.sym,
-					XKB_KEY_NoSymbol, term.mods,
-					term.repeat.unicode);
+		send_key(term.repeat.sym, term.repeat.unicode);
 	} else {
 		term.repeat.timeout -= diff;
 	}
@@ -1067,13 +1075,8 @@ static void kbd_key(void *data, struct wl_keyboard *k, uint32_t serial,
 		b = b->next;
 	}
 
-	if (!action) {
-		if (tsm_vte_handle_keyboard(term.vte, sym, XKB_KEY_NoSymbol,
-					    term.mods, unicode) &&
-		    term.cfg.scroll_to_bottom_on_input &&
-		    tsm_screen_sb_reset(term.screen))
-			term.need_redraw = true;
-	}
+	if (!action && send_key(sym, unicode) && term.cfg.scroll_to_bottom_on_input)
+		term.need_redraw |= tsm_screen_sb_reset(term.screen);
 
 	if (xkb_keymap_key_repeats(term.xkb_keymap, key + 8)) {
 		term.repeat.key = key;
@@ -1775,6 +1778,7 @@ static void setup_pty(char *argv[])
 static void action_reset(void)
 {
 	tsm_vte_reset(term.vte);
+	term.need_redraw = true;
 }
 
 static void action_hard_reset(void)
@@ -2317,6 +2321,7 @@ retry:
 
 		wl_display_flush(term.display);
 
+		pollfds[EV_TTY].fd = term.master_fd;
 		pollfds[EV_PASTE].fd = term.paste.fd[0];
 		n = poll(pollfds, NUM_POLLFDS, term.repeat.timeout);
 		if (n < 0) {
