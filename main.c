@@ -889,6 +889,9 @@ static void d_copy(uint32_t serial)
 	wl_data_source_offer(term.d_copy.source, "text/plain");
 	wl_data_source_add_listener(term.d_copy.source, &ds_listener, NULL);
 	wl_data_device_set_selection(term.d_d, term.d_copy.source, serial);
+	tsm_screen_selection_reset(term.screen);
+	term.selection = SS_RESET;
+	term.need_redraw = true;
 }
 
 static void d_uncopy(void)
@@ -905,9 +908,10 @@ static void d_uncopy(void)
 static uint32_t action_copy_serial;
 static void action_copy(void)
 {
+	if (term.selection != SS_ACTIVE)
+		return;
 	d_uncopy();
-	if (term.selection == SS_ACTIVE)
-		d_copy(action_copy_serial);
+	d_copy(action_copy_serial);
 }
 
 static void reset_repeat(void)
