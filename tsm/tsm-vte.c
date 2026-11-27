@@ -137,6 +137,7 @@ enum parser_action {
 #define FLAG_PREPEND_ESCAPE			0x00010000 /* Prepend escape character to next output */
 #define FLAG_TITE_INHIBIT_MODE			0x00020000 /* Prevent switching to alternate screen buffer */
 #define FLAG_BRACKETED_PASTE_MODE		0x00040000
+#define FLAG_DISTINCT_CTRL_BRACKET		0x00080000
 
 #define ENDPASTE "\e[201~"
 
@@ -1601,6 +1602,14 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
 		tsm_screen_erase_chars(vte->con, num);
 		break;
 	case 'm':
+		if (vte->csi_flags == CSI_GT && vte->csi_argv[0] == 4) {
+			/* xterm modifyOtherKeys level 2 */
+			if (vte->csi_argv[1] == 2)
+				vte->flags |= FLAG_DISTINCT_CTRL_BRACKET;
+			else
+				vte->flags &= ~FLAG_DISTINCT_CTRL_BRACKET;
+			break;
+		}
 		csi_attribute(vte);
 		break;
 	case 'p':
@@ -1694,6 +1703,10 @@ static void do_csi(struct tsm_vte *vte, uint32_t data)
 		tsm_screen_tab_right(vte->con, num);
 		break;
 	case 'n': /* DSR */
+		if (vte->csi_flags == CSI_GT && vte->csi_argv[0] == 4) {
+			vte->flags &= ~FLAG_DISTINCT_CTRL_BRACKET;
+			break;
+		}
 		/* device status reports */
 		csi_dsr(vte);
 		break;
@@ -2399,6 +2412,11 @@ bool tsm_vte_handle_keyboard(struct tsm_vte *vte, uint32_t keysym,
 		sym = keysym;
 
 	if (mods & TSM_CONTROL_MASK) {
+		if ((vte->flags & FLAG_DISTINCT_CTRL_BRACKET) &&
+		    mods == TSM_CONTROL_MASK && sym == XKB_KEY_bracketleft) {
+			vte_write(vte, "\e[27;5;91~", 10);
+			return true;
+		}
 		switch (sym) {
 		case XKB_KEY_2:
 		case XKB_KEY_space:
